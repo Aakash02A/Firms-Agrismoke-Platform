@@ -1,0 +1,21 @@
+services:
+  agri-smoke-ai:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: agri_smoke_platform
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../database:/app/database
+      - ../ai-ml/models:/app/ai-ml/models
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
