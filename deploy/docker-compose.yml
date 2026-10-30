@@ -1,4 +1,5 @@
 services:
+  # 1. Main FastAPI Application
   agri-smoke-ai:
     build:
       context: ..
@@ -13,9 +14,42 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PORT=8000
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3
 
+  # 2. Redis Distributed Cache
+  redis:
+    image: redis:7-alpine
+    container_name: agri_smoke_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  # 3. Enterprise Spatial Database (PostgreSQL 16 + PostGIS 3.4)
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: agri_smoke_postgis
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=agrismoke
+      - POSTGRES_PASSWORD=agrismoke_secret
+      - POSTGRES_DB=agrismoke_db
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ../database/schema_postgres_postgis.sql:/docker-entrypoint-initdb.d/init.sql
+
+volumes:
+  redis_data:
+  postgis_data:
