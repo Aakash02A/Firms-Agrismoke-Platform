@@ -404,9 +404,6 @@ class AgriSmokeMapEngine {
             `;
         }
     }
-            `;
-        }
-    }
 
     getAqiColor(aqi) {
         if (aqi <= 50) return '#00e676';
