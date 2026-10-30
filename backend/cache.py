@@ -104,3 +104,4 @@ class CacheInterface:
 
 # Global singleton cache instance
 cache = CacheInterface()
+

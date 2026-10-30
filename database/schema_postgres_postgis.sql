@@ -209,3 +209,4 @@ CREATE TABLE IF NOT EXISTS data_provider_status (
     records_count INTEGER DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
