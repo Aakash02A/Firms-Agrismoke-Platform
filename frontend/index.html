@@ -343,7 +343,7 @@
              ========================================================================= -->
         <section id="tab-calculator" class="tab-panel">
             <!-- Scenario Presets Bar -->
-            <div class="card" style="margin-bottom:18px;">
+            <div class="card" style="margin-bottom:14px;">
                 <div
                     style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
                     <div>
@@ -356,6 +356,40 @@
                     <button class="btn btn-sm" data-preset="favorableWind">Favorable Easterly Shift</button>
                     <button class="btn btn-sm" data-preset="aggressiveMitigation">Aggressive In-Situ Mitigation</button>
                     <button class="btn btn-sm" data-preset="monsoonClean">Clean Baseline (Post-Rain)</button>
+                </div>
+            </div>
+
+            <!-- Live Meteorology & Satellite Sync Strip -->
+            <div class="card" style="margin-bottom:18px;border-left:4px solid var(--accent-primary);">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="font-size:20px;">🌤️</span>
+                            <div>
+                                <h3 class="card-title" style="font-size:13.5px;margin:0;">Live Meteorology &amp; Satellite Telemetry Sync</h3>
+                                <p class="card-subtitle" style="margin:0;font-size:11.5px;">Auto-populate atmospheric sliders with real-time Open-Meteo &amp; NASA telemetry</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <button id="btn-sync-weather" class="btn btn-sm btn-primary" style="font-size:11.5px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px;">
+                            <span id="weather-sync-spinner" style="display:none;">⏳</span>
+                            <span>🌤️ Sync Live Weather</span>
+                        </button>
+                        <button id="btn-sync-live-fires" class="btn btn-sm" style="font-size:11.5px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px;">
+                            <span id="fires-sync-spinner" style="display:none;">⏳</span>
+                            <span>🛰️ Sync Satellite Fires</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="weather-telemetry-strip" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:12px;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;font-size:11.5px;">
+                    <span style="color:var(--text-muted);">Source: <strong id="weather-source-badge" style="color:var(--accent-primary);">Default Baseline</strong></span>
+                    <span>Temp: <strong id="weather-live-temp">24.2°C</strong></span>
+                    <span>Wind: <strong id="weather-live-wind">11.5 km/h</strong></span>
+                    <span>Bearing: <strong id="weather-live-dir">305° NW</strong></span>
+                    <span>PBL Height: <strong id="weather-live-pbl">480m</strong></span>
+                    <span>Ventilation: <strong id="weather-live-vent">1533</strong></span>
+                    <span>Trapping Risk: <strong id="weather-live-risk" class="badge" style="background:#fee2e2;color:#dc2626;border-color:#fca5a5;">MODERATE</strong></span>
                 </div>
             </div>
 

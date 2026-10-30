@@ -1008,6 +1008,103 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // 13c. Live Meteorology & Satellite Telemetry Sync Handlers
+    const btnSyncWeather = document.getElementById('btn-sync-weather');
+    const weatherSyncSpinner = document.getElementById('weather-sync-spinner');
+    const btnSyncLiveFires = document.getElementById('btn-sync-live-fires');
+    const firesSyncSpinner = document.getElementById('fires-sync-spinner');
+
+    const weatherSourceBadge = document.getElementById('weather-source-badge');
+    const weatherLiveTemp = document.getElementById('weather-live-temp');
+    const weatherLiveWind = document.getElementById('weather-live-wind');
+    const weatherLiveDir = document.getElementById('weather-live-dir');
+    const weatherLivePbl = document.getElementById('weather-live-pbl');
+    const weatherLiveVent = document.getElementById('weather-live-vent');
+    const weatherLiveRisk = document.getElementById('weather-live-risk');
+
+    if (btnSyncWeather) {
+        btnSyncWeather.addEventListener('click', async () => {
+            btnSyncWeather.disabled = true;
+            if (weatherSyncSpinner) weatherSyncSpinner.style.display = 'inline-block';
+
+            try {
+                showNotification("Fetching real-time atmospheric conditions from Open-Meteo...", "info");
+                const res = await fetch(`${API_BASE}/api/v1/weather/live`);
+                if (res.ok) {
+                    const data = await res.json();
+
+                    // Update UI input sliders
+                    setInputsToUI({
+                        windSpeed: data.windSpeed,
+                        windDirectionDeg: data.windDirectionDeg,
+                        pblHeight: data.pblHeight
+                    });
+
+                    // Update telemetry strip
+                    if (weatherSourceBadge) weatherSourceBadge.textContent = `${data.source} (${data.location})`;
+                    if (weatherLiveTemp) weatherLiveTemp.textContent = `${data.temperature}°C`;
+                    if (weatherLiveWind) weatherLiveWind.textContent = `${data.windSpeed} km/h`;
+                    if (weatherLiveDir) weatherLiveDir.textContent = `${data.windDirectionDeg}° ${getCompassDirection(data.windDirectionDeg)}`;
+                    if (weatherLivePbl) weatherLivePbl.textContent = `${data.pblHeight}m`;
+                    if (weatherLiveVent) weatherLiveVent.textContent = data.ventilationIndex;
+                    if (weatherLiveRisk) {
+                        weatherLiveRisk.textContent = data.inversionRisk;
+                        if (data.inversionRisk.includes('HIGH') || data.inversionRisk.includes('EXTREME')) {
+                            weatherLiveRisk.style.background = '#fee2e2';
+                            weatherLiveRisk.style.color = '#dc2626';
+                            weatherLiveRisk.style.borderColor = '#fca5a5';
+                        } else if (data.inversionRisk.includes('MODERATE')) {
+                            weatherLiveRisk.style.background = '#fef3c7';
+                            weatherLiveRisk.style.color = '#d97706';
+                            weatherLiveRisk.style.borderColor = '#fcd34d';
+                        } else {
+                            weatherLiveRisk.style.background = '#ecfdf5';
+                            weatherLiveRisk.style.color = '#059669';
+                            weatherLiveRisk.style.borderColor = '#a7f3d0';
+                        }
+                    }
+
+                    showNotification(`Live weather updated: Wind ${data.windSpeed} km/h from ${data.windDirectionDeg}°, PBL ${data.pblHeight}m.`, 'success');
+                } else {
+                    showNotification("Failed to fetch live weather from server. Using calibrated defaults.", "warning");
+                }
+            } catch (err) {
+                showNotification(`Weather sync error: ${err.message}`, "error");
+            } finally {
+                btnSyncWeather.disabled = false;
+                if (weatherSyncSpinner) weatherSyncSpinner.style.display = 'none';
+            }
+        });
+    }
+
+    if (btnSyncLiveFires) {
+        btnSyncLiveFires.addEventListener('click', async () => {
+            btnSyncLiveFires.disabled = true;
+            if (firesSyncSpinner) firesSyncSpinner.style.display = 'inline-block';
+
+            try {
+                showNotification("Checking live NASA satellite fire observations...", "info");
+                const res = await fetch(`${API_BASE}/api/v1/predict/live`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.liveFiresDetected && data.liveFiresDetected > 0) {
+                        setInputsToUI({ fireCount: data.liveFiresDetected });
+                        showNotification(`Loaded ${data.liveFiresDetected} active fires detected by NASA FIRMS!`, "success");
+                    } else {
+                        showNotification("No active satellite thermal fires detected in current window. Keeping current count.", "info");
+                    }
+                } else {
+                    showNotification("Unable to query live satellite fires. Using offline benchmark.", "warning");
+                }
+            } catch (err) {
+                showNotification(`Satellite fire sync error: ${err.message}`, "error");
+            } finally {
+                btnSyncLiveFires.disabled = false;
+                if (firesSyncSpinner) firesSyncSpinner.style.display = 'none';
+            }
+        });
+    }
+
     // 14. Check Backend API Connectivity & Hydrate Live Data
     async function checkBackendConnectivity() {
         const statusPill = document.querySelector('.status-pill');

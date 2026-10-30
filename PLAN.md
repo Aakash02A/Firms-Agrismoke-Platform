@@ -14,7 +14,7 @@
 | **Phase 4** | FastAPI Backend Server & NASA FIRMS Satellite Integration | **Completed** | Oct 2026 |
 | **Phase 5** | Frontend Geospatial Canvas & Interactive Vector Visualizations | **Completed** | Oct 2026 |
 | **Phase 6** | End-to-End Automated Testing, Containerization & CI Scripts | **Completed** | Oct 2026 |
-| **Phase 7** | Live Meteorological Data Integration & Automated Background Sync | **In Progress (Backend Complete)** | Oct 2026 |
+| **Phase 7** | Live Meteorological Data Integration & Automated Background Sync | **Completed** | Oct 2026 |
 | **Phase 8** | Advanced Spatio-Temporal ML & Satellite AOD Ingestion | **To-Do (Planned)** | Q1 2027 |
 | **Phase 9** | Real-Time Push Notifications, WebSockets & Policy Simulator | **To-Do (Planned)** | Q1 2027 |
 | **Phase 10** | Cloud-Native Scale-Out (PostGIS + Redis + Kubernetes) | **To-Do (Future)** | Q2 2027 |
@@ -69,8 +69,6 @@
 ## 📋 Upcoming Phases (To-Do)
 
 ### Phase 7: Live Meteorological API Integration & Automated Background Sync
-> **Status**: Completed (Backend & Ingestion Engine) | **Updated**: Oct 2026
-
 - [x] **Real-Time Weather Integration**:
   - Connected Open-Meteo API to fetch real-time ambient temperature, relative humidity, surface pressure, wind speed, and wind direction for the Indo-Gangetic plain.
   - Implemented dynamic Planetary Boundary Layer (PBL) height extraction from hourly meteorological model data with ventilation index calculation.
@@ -81,8 +79,10 @@
 - [x] **REST API Weather & Scheduler Endpoints**:
   - Added `/api/v1/weather/live` and `/api/v1/weather/refresh` for real-time airshed telemetry.
   - Added `/api/v1/scheduler/status`, `/api/v1/scheduler/trigger/firms`, and `/api/v1/scheduler/trigger/weather` for background job monitoring.
-- [ ] **Live Telemetry Toggle in UI**:
-  - Add a "Use Live Weather" toggle on the frontend dashboard to auto-populate sliders with real-time readings.
+- [x] **Live Telemetry Controls in UI**:
+  - Added "Live Meteorology & Satellite Telemetry Sync" toolbar on the prediction dashboard.
+  - "🌤️ Sync Live Weather" button queries Open-Meteo via backend, dynamically populates sliders (wind speed, wind bearing, PBL height), and updates the live metric strip.
+  - "🛰️ Sync Satellite Fires" button pulls live satellite active fire counts from NASA FIRMS.
 
 ### Phase 8: Advanced Spatio-Temporal ML & Satellite AOD Ingestion
 > **Target**: Q1 2027 | **Priority**: Medium
