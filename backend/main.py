@@ -192,6 +192,36 @@ def get_diurnal_forecast(
     }
     return predictor.generate_hourly_forecast(params)
 
+
+@app.get("/api/v1/forecast/multiday")
+def get_multiday_forecast(
+    fireCount: int = 1684,
+    windSpeed: float = 11.5,
+    windDirectionDeg: int = 305,
+    pblHeight: int = 480,
+    urbanBaselineAqi: int = 180,
+    bioDecomposerAdoption: int = 25,
+    happySeederAdoption: int = 30
+):
+    """Generate multi-day 72-hour forward atmospheric dispersion outlook with uncertainty bounds."""
+    params = {
+        "fireCount": fireCount,
+        "windSpeed": windSpeed,
+        "windDirectionDeg": windDirectionDeg,
+        "pblHeight": pblHeight,
+        "urbanBaselineAqi": urbanBaselineAqi,
+        "bioDecomposerAdoption": bioDecomposerAdoption,
+        "happySeederAdoption": happySeederAdoption
+    }
+    return predictor.generate_multiday_forecast(params)
+
+
+@app.get("/api/v1/model/drift")
+def get_model_drift_evaluation():
+    """Evaluate model prediction accuracy and drift against current ground monitoring stations."""
+    stations = db.get_monitoring_stations()
+    return predictor.evaluate_ground_benchmark(stations)
+
 @app.get("/api/model/metrics")
 def get_model_metrics():
     """Returns Machine Learning model validation metrics, R2 score, RMSE, and feature importances."""

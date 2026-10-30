@@ -152,7 +152,20 @@ def test_api_endpoints():
     assert "firmsIntervalHours" in sched_status
     print(f"[PASS] /api/v1/scheduler/status -> Running: {sched_status['isRunning']}, FIRMS Interval: {sched_status['firmsIntervalHours']}h, Weather Refreshes: {sched_status['totalWeatherRefreshes']}")
 
-    print("=== Backend API & Data Delivery: ALL 20 ENDPOINTS PASSED! ===")
+    # 21. Test /api/v1/forecast/multiday
+    multiday = main.get_multiday_forecast()
+    assert multiday["horizonHours"] == 72
+    assert len(multiday["hourly"]) == 72
+    assert len(multiday["daySummaries"]) == 3
+    print(f"[PASS] /api/v1/forecast/multiday -> Horizon: 72h, Day 1 AQI: {multiday['daySummaries'][0]['meanAqi']}, Day 2 AQI: {multiday['daySummaries'][1]['meanAqi']}, Day 3 AQI: {multiday['daySummaries'][2]['meanAqi']}")
+
+    # 22. Test /api/v1/model/drift
+    drift = main.get_model_drift_evaluation()
+    assert "status" in drift
+    assert "meanAbsoluteError" in drift
+    print(f"[PASS] /api/v1/model/drift -> Status: {drift['status']}, Evaluated Stations: {drift['evaluatedStationCount']}, MAE: {drift['meanAbsoluteError']} AQI")
+
+    print("=== Backend API & Data Delivery: ALL 22 ENDPOINTS PASSED! ===")
 
 if __name__ == "__main__":
     test_api_endpoints()

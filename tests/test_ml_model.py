@@ -87,6 +87,37 @@ def test_ml_model():
     assert hour_4["aqi"] > hour_14["aqi"], "Nocturnal AQI should exceed midday convective AQI"
     assert hour_4["pbl"] < hour_14["pbl"], "Nocturnal PBL should be compressed relative to midday"
 
+    # 8. Uncertainty bounds validation (90% Confidence Interval)
+    ci = baseline.get("confidenceInterval")
+    assert ci is not None, "Missing confidence interval!"
+    assert ci["confidenceLevel"] == "90%"
+    assert ci["aqiLower"] <= baseline["predictedAqi"] <= ci["aqiUpper"], f"AQI {baseline['predictedAqi']} outside [{ci['aqiLower']}, {ci['aqiUpper']}]"
+    assert ci["pm25Lower"] <= baseline["totalPm25"] <= ci["pm25Upper"], f"PM2.5 {baseline['totalPm25']} outside [{ci['pm25Lower']}, {ci['pm25Upper']}]"
+    print(f"[PASS] Uncertainty bounds (90% CI): AQI [{ci['aqiLower']} - {ci['aqiUpper']}] (margin: +/-{ci['aqiMargin']}), PM2.5 [{ci['pm25Lower']} - {ci['pm25Upper']}] ug/m3")
+
+    # 9. Satellite AOD proxy validation
+    aod = baseline.get("satelliteAodProxy")
+    assert aod is not None, "Missing satellite AOD proxy!"
+    assert 0.1 <= aod["estimatedAod550nm"] <= 4.0, f"Unexpected AOD: {aod['estimatedAod550nm']}"
+    assert aod["columnLoadingMgM2"] > 0
+    print(f"[PASS] Satellite AOD Proxy (550nm): AOD = {aod['estimatedAod550nm']} ({aod['opticalThicknessCategory']}), Column Mass = {aod['columnLoadingMgM2']} mg/m2")
+
+    # 10. Multi-day 72h forward outlook test
+    multiday = predictor.generate_multiday_forecast({
+        "fireCount": 1684, "windSpeed": 11.5, "windDirectionDeg": 305, "pblHeight": 480
+    }, start_hour=0)
+    assert multiday["horizonHours"] == 72
+    assert len(multiday["hourly"]) == 72, f"Expected 72 hourly points, got {len(multiday['hourly'])}"
+    assert len(multiday["daySummaries"]) == 3, f"Expected 3 day summaries, got {len(multiday['daySummaries'])}"
+    day1, day2, day3 = multiday["daySummaries"]
+    print(f"[PASS] 72h Multi-Day Outlook: Day 1 Mean AQI = {day1['meanAqi']} | Day 2 Mean AQI = {day2['meanAqi']} | Day 3 Mean AQI = {day3['meanAqi']}")
+
+    # 11. Ground monitor benchmark & drift detection
+    ground_eval = predictor.evaluate_ground_benchmark()
+    assert ground_eval["status"] in ["CALIBRATED_NOMINAL", "DRIFT_ATTENTION"]
+    assert ground_eval["evaluatedStationCount"] >= 8
+    print(f"[PASS] Ground Monitor Benchmark: Status = {ground_eval['status']} (MAE: {ground_eval['meanAbsoluteError']} AQI, Bias: {ground_eval['biasError']}, Stations: {ground_eval['evaluatedStationCount']})")
+
     print("=== AI/ML Model & Forecasting: ALL TESTS PASSED! ===")
 
 if __name__ == "__main__":
