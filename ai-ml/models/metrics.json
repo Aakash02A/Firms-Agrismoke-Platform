@@ -1,0 +1,75 @@
+{
+  "model_name": "GradientBoostingRegressor",
+  "selected_at": "2026-10-29 08:50:26 UTC",
+  "target_variable": "total_pm25",
+  "features": [
+    "fire_count",
+    "wind_speed",
+    "wind_direction_deg",
+    "pbl_height",
+    "urban_baseline_aqi",
+    "bio_decomposer_adoption",
+    "happy_seeder_adoption",
+    "temperature",
+    "humidity",
+    "effective_fires",
+    "dir_alignment",
+    "wind_coeff",
+    "inversion_multiplier",
+    "ventilation_index"
+  ],
+  "best_metrics": {
+    "r2_score": 0.9886,
+    "rmse": 17.672,
+    "mae": 9.509,
+    "training_time_sec": 9.86
+  },
+  "all_candidate_metrics": {
+    "GradientBoostingRegressor": {
+      "r2_score": 0.9886,
+      "rmse": 17.672,
+      "mae": 9.509,
+      "training_time_sec": 9.86
+    },
+    "RandomForestRegressor": {
+      "r2_score": 0.9834,
+      "rmse": 21.381,
+      "mae": 11.037,
+      "training_time_sec": 2.68
+    },
+    "RidgeRegression": {
+      "r2_score": 0.6586,
+      "rmse": 96.896,
+      "mae": 60.172,
+      "training_time_sec": 0.01
+    },
+    "XGBoostRegressor": {
+      "r2_score": 0.9878,
+      "rmse": 18.31,
+      "mae": 9.551,
+      "training_time_sec": 2.74
+    }
+  },
+  "feature_importances": {
+    "effective_fires": 0.4052,
+    "dir_alignment": 0.2388,
+    "pbl_height": 0.1706,
+    "inversion_multiplier": 0.1093,
+    "wind_direction_deg": 0.035,
+    "wind_coeff": 0.0216,
+    "urban_baseline_aqi": 0.0165,
+    "ventilation_index": 0.0011,
+    "bio_decomposer_adoption": 0.0008,
+    "wind_speed": 0.0004,
+    "humidity": 0.0003,
+    "happy_seeder_adoption": 0.0002,
+    "temperature": 0.0002,
+    "fire_count": 0.0001
+  },
+  "dataset_summary": {
+    "total_samples": 6500,
+    "pm25_min": 26.08,
+    "pm25_max": 1354.38,
+    "pm25_mean": 172.0
+  }
+}
