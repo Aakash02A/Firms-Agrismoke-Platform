@@ -465,9 +465,11 @@ credentials/, secrets/      → Credential directories
 
 ## 📚 Further Reading
 
+- [Project Execution Plan & Roadmap (Phases)](PLAN.md)
 - [Architecture Overview](doc/ARCHITECTURE.md)
 - [API Specification](doc/API_SPECIFICATION.md)
 - [Data Dictionary](doc/DATA_DICTIONARY.md)
 - [ML Model Documentation](doc/ML_MODEL_DOC.md)
 - [Setup Guide](doc/SETUP_GUIDE.md)
 - [Frontend README](frontend/README.md)
+
