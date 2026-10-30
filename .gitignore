@@ -1,0 +1,136 @@
+# ==============================================================================
+# Git Ignore Configuration - Firms-Agrismoke-Platform
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Confidential Data, Secrets & Credentials
+# ------------------------------------------------------------------------------
+# Environment variables and local configs (contains API keys, passwords, tokens)
+.env
+.env.*
+*.env
+!.env.example
+*.secrets
+secrets/
+credentials/
+private/
+
+# NASA FIRMS, Cloud, & External API tokens and auth files
+*credentials*.json
+*secret*.json
+*service-account*.json
+client_secret*.json
+api_keys.json
+auth.json
+token.json
+*.token
+
+# Cryptographic Keys and Certificates
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*.der
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# ------------------------------------------------------------------------------
+# 2. Database Files & Runtime Data Dumps (Confidential user/telemetry data)
+# ------------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.db3
+database/*.db
+*.dump
+*.sql.gz
+
+# ------------------------------------------------------------------------------
+# 3. Machine Learning Models & Heavy Binary Artifacts
+# ------------------------------------------------------------------------------
+*.joblib
+*.pkl
+*.pickle
+*.h5
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# ------------------------------------------------------------------------------
+# 4. Python Bytecode, Caches & Environments
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Build & Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ------------------------------------------------------------------------------
+# 5. Logs, Diagnostics & Temporary Files
+# ------------------------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# ------------------------------------------------------------------------------
+# 6. Operating System & IDE Specific Files
+# ------------------------------------------------------------------------------
+# OS metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+
+# IDEs & Editors
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
