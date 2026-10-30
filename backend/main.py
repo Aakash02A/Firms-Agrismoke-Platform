@@ -10,7 +10,7 @@ import csv
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -32,6 +32,13 @@ from model_inference import predictor
 import database as db
 from backend.integrations.weather import weather_service, LiveWeatherSnapshot
 from backend.scheduler import scheduler
+from backend.policy_simulator import (
+    PolicySimulationRequest,
+    PolicySimulationResult,
+    simulate_policy_intervention,
+    get_available_districts
+)
+from backend.alerts_dispatcher import alert_engine, CONFIGURED_CHANNELS, DISPATCH_LOGS
 
 app = FastAPI(
     title="AgriSmoke AI API",
@@ -471,6 +478,112 @@ def trigger_firms_sync_job():
 def trigger_weather_sync_job():
     """Immediately trigger background weather sync job."""
     return scheduler.trigger_weather_refresh_now()
+
+
+# ----------------- Real-Time WebSocket Telemetry Stream -----------------
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast_json(self, message: dict):
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                self.disconnect(connection)
+
+ws_manager = ConnectionManager()
+
+
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry_stream(websocket: WebSocket):
+    """Real-time bi-directional WebSocket telemetry stream for connected dashboards."""
+    await ws_manager.connect(websocket)
+    try:
+        weather = weather_service.get_live_weather()
+        weather_dict = weather.model_dump() if hasattr(weather, "model_dump") else weather.dict()
+        await websocket.send_json({
+            "type": "HANDSHAKE_INIT",
+            "message": "Connected to AgriSmoke AI Real-Time Telemetry Stream",
+            "activeClients": len(ws_manager.active_connections),
+            "liveWeather": weather_dict
+        })
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_json({
+                "type": "HEARTBEAT_ACK",
+                "clientPayload": data
+            })
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception:
+        ws_manager.disconnect(websocket)
+
+
+# ----------------- Agricultural & Policy Simulation Endpoints -----------------
+
+@app.get("/api/v1/policy/districts")
+def get_policy_districts():
+    """Retrieve list of priority agricultural districts with baseline stubble metrics."""
+    return get_available_districts()
+
+
+@app.post("/api/v1/policy/simulate", response_model=PolicySimulationResult)
+def run_policy_simulation(req: PolicySimulationRequest):
+    """
+    Simulate Crop Residue Management (CRM) interventions:
+    calculates avoided emissions, public health economic savings, and Benefit-Cost Ratios (BCR).
+    """
+    return simulate_policy_intervention(req)
+
+
+# ----------------- Multi-Channel Alert Evaluation & Dispatch Endpoints -----------------
+
+class AlertEvaluationRequest(BaseModel):
+    predictedAqi: int = Field(default=412, ge=0, le=1000)
+    fireCount: int = Field(default=1850, ge=0)
+    pblHeight: int = Field(default=240, ge=50)
+    windDirectionDeg: int = Field(default=310, ge=0, le=360)
+    windSpeed: float = Field(default=13.5, ge=0.0)
+
+
+@app.post("/api/v1/alerts/evaluate")
+def evaluate_and_dispatch_alerts(req: AlertEvaluationRequest):
+    """
+    Evaluate telemetry against CAQM GRAP and airshed safety rules.
+    Persists triggered alerts to SQLite and dispatches to configured notification channels.
+    """
+    alerts = alert_engine.evaluate_and_dispatch(
+        predicted_aqi=req.predictedAqi,
+        fire_count=req.fireCount,
+        pbl_height=req.pblHeight,
+        wind_direction_deg=req.windDirectionDeg,
+        wind_speed=req.windSpeed
+    )
+    return {
+        "status": "EVALUATED",
+        "alertsTriggered": len(alerts),
+        "alerts": alerts,
+        "dispatchesActive": len(CONFIGURED_CHANNELS)
+    }
+
+
+@app.get("/api/v1/alerts/channels")
+def get_alert_channels_and_logs(limit: int = 20):
+    """Retrieve configured communication channels and recent dispatch audit logs."""
+    return {
+        "channels": CONFIGURED_CHANNELS,
+        "recentDispatches": DISPATCH_LOGS[:limit]
+    }
 
 
 @app.on_event("startup")

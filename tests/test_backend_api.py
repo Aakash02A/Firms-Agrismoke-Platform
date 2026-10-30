@@ -165,7 +165,43 @@ def test_api_endpoints():
     assert "meanAbsoluteError" in drift
     print(f"[PASS] /api/v1/model/drift -> Status: {drift['status']}, Evaluated Stations: {drift['evaluatedStationCount']}, MAE: {drift['meanAbsoluteError']} AQI")
 
-    print("=== Backend API & Data Delivery: ALL 22 ENDPOINTS PASSED! ===")
+    # 23. Test /api/v1/policy/districts
+    districts = main.get_policy_districts()
+    assert len(districts) >= 8
+    assert all("id" in d and "annualFiresBaseline" in d for d in districts)
+    print(f"[PASS] /api/v1/policy/districts -> Retrieved {len(districts)} agricultural districts (Top: {districts[0]['name']})")
+
+    # 24. Test /api/v1/policy/simulate
+    policy_res = main.run_policy_simulation(main.PolicySimulationRequest(
+        districtId="PB_SANGRUR",
+        bioDecomposerAdoptionPct=40.0,
+        happySeederAdoptionPct=45.0,
+        subsidyBudgetCrores=20.0
+    ))
+    assert policy_res.firesPrevented > 0
+    assert policy_res.pm25AvoidedTonnes > 0
+    assert policy_res.benefitCostRatio > 1.0
+    print(f"[PASS] /api/v1/policy/simulate -> District: {policy_res.districtName}, Prevented Fires: {policy_res.firesPrevented} (-{policy_res.fireReductionPct}%), PM2.5 Avoided: {policy_res.pm25AvoidedTonnes}t, BCR: {policy_res.benefitCostRatio}x")
+
+    # 25. Test /api/v1/alerts/evaluate
+    eval_res = main.evaluate_and_dispatch_alerts(main.AlertEvaluationRequest(
+        predictedAqi=465,
+        fireCount=2100,
+        pblHeight=220,
+        windDirectionDeg=312,
+        windSpeed=14.0
+    ))
+    assert eval_res["status"] == "EVALUATED"
+    assert eval_res["alertsTriggered"] >= 1
+    print(f"[PASS] /api/v1/alerts/evaluate -> Triggered {eval_res['alertsTriggered']} emergency alerts across {eval_res['dispatchesActive']} channels")
+
+    # 26. Test /api/v1/alerts/channels
+    channels_res = main.get_alert_channels_and_logs()
+    assert len(channels_res["channels"]) >= 4
+    assert len(channels_res["recentDispatches"]) >= 1
+    print(f"[PASS] /api/v1/alerts/channels -> {len(channels_res['channels'])} active channels, {len(channels_res['recentDispatches'])} delivered dispatch logs")
+
+    print("=== Backend API & Data Delivery: ALL 26 ENDPOINTS & ENGINES PASSED! ===")
 
 if __name__ == "__main__":
     test_api_endpoints()

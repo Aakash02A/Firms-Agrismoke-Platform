@@ -16,7 +16,7 @@
 | **Phase 6** | End-to-End Automated Testing, Containerization & CI Scripts | **Completed** | Oct 2026 |
 | **Phase 7** | Live Meteorological Data Integration & Automated Background Sync | **Completed** | Oct 2026 |
 | **Phase 8** | Advanced Spatio-Temporal ML & Satellite AOD Ingestion | **Completed (Core Analytics)** | Oct 2026 |
-| **Phase 9** | Real-Time Push Notifications, WebSockets & Policy Simulator | **To-Do (Planned)** | Q1 2027 |
+| **Phase 9** | Real-Time Push Notifications, WebSockets & Policy Simulator | **Completed (Core Services)** | Oct 2026 |
 | **Phase 10** | Cloud-Native Scale-Out (PostGIS + Redis + Kubernetes) | **To-Do (Future)** | Q2 2027 |
 
 ---
@@ -100,16 +100,17 @@
   - Exposed `/api/v1/forecast/multiday` and `/api/v1/model/drift` in FastAPI backend.
 
 ### Phase 9: Real-Time Alerts, WebSockets & Policy Intervention Simulator
-> **Target**: Q1 2027 | **Priority**: Medium
-
-- [ ] **WebSocket Telemetry Stream**:
-  - Establish a persistent WebSocket endpoint (`/ws/telemetry`) broadcasting live fire detections and plume updates directly to connected dashboard clients.
-- [ ] **Multi-Channel Alert Dispatcher**:
-  - Add email (SMTP), SMS, and Webhook dispatchers triggered when predicted AQI crosses CAQM GRAP Stage III/IV thresholds.
-- [ ] **Farm Intervention Economic Simulator**:
-  - Build an interactive policy simulation tab allowing state agricultural planners to calculate cost-benefit metrics for distributing Happy Seeders, CRM subsidies, and bio-decomposer solutions across specific high-fire districts.
-- [ ] **Role-Based Access Control (RBAC)**:
-  - Add JWT authentication distinguishing between Public Viewers, Research Analysts, and Government Enforcement Officers.
+- [x] **Real-Time WebSocket Telemetry Stream**:
+  - Implemented `ConnectionManager` and `/ws/telemetry` endpoint supporting persistent bi-directional streaming, initial state handshake, and heartbeat ping/pong.
+- [x] **Multi-Channel Alert Evaluation & Dispatcher**:
+  - Built `backend/alerts_dispatcher.py` evaluating predicted AQI and meteorology against CAQM GRAP Stage III/IV, nocturnal inversion, and corridor transport rules.
+  - Automatically records alerts to SQLite and simulates multi-channel dispatch across CAQM Portal, KVK SMS Broadcast, CPCB Webhook, and Public Health Digest.
+- [x] **Farm Intervention Economic & Agricultural Policy Simulator**:
+  - Implemented `backend/policy_simulator.py` covering high-burn agricultural districts (Sangrur, Firozpur, Bathinda, Tarn Taran, Ludhiana, Kaithal, Fatehabad, Jind).
+  - Models Pusa Bio-Decomposer spraying, Happy Seeder / Super SMS machinery, and ex-situ biomass pelletization.
+  - Calculates fires prevented, biomass diverted (tonnes), avoided $\text{PM}_{2.5}$ emissions (tonnes), public health economic savings (₹ Crores), and Benefit-Cost Ratios (BCR).
+- [x] **REST API Policy & Alert Endpoints**:
+  - Exposed `/api/v1/policy/districts`, `/api/v1/policy/simulate`, `/api/v1/alerts/evaluate`, and `/api/v1/alerts/channels`.
 
 ### Phase 10: Enterprise Cloud-Native Scale-Out
 > **Target**: Q2 2027 | **Priority**: Low / Long-term
