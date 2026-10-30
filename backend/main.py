@@ -30,6 +30,8 @@ if str(ROOT_DIR / "backend") not in sys.path:
 
 from model_inference import predictor
 import database as db
+from backend.integrations.weather import weather_service, LiveWeatherSnapshot
+from backend.scheduler import scheduler
 
 app = FastAPI(
     title="AgriSmoke AI API",
@@ -405,6 +407,52 @@ def update_alert(alert_id: str, req: AlertStatusUpdateRequest):
     if not success:
         raise HTTPException(status_code=404, detail=f"Alert '{alert_id}' not found")
     return {"message": f"Alert {alert_id} status updated to {req.status.upper()}"}
+
+
+# ----------------- Weather & Meteorology Endpoints -----------------
+
+@app.get("/api/v1/weather/live", response_model=LiveWeatherSnapshot)
+def get_live_meteorology(location: str = "delhi_ncr"):
+    """Fetch real-time atmospheric weather and boundary layer height."""
+    return weather_service.get_live_weather(location_key=location)
+
+
+@app.post("/api/v1/weather/refresh", response_model=LiveWeatherSnapshot)
+def refresh_live_meteorology(location: str = "delhi_ncr"):
+    """Force fresh fetch of real-time weather from Open-Meteo."""
+    return weather_service.refresh_cache(location_key=location)
+
+
+# ----------------- Scheduler Telemetry Endpoints -----------------
+
+@app.get("/api/v1/scheduler/status")
+def get_scheduler_status():
+    """Retrieve background telemetry scheduler status and job logs."""
+    return scheduler.get_status()
+
+
+@app.post("/api/v1/scheduler/trigger/firms")
+def trigger_firms_sync_job():
+    """Immediately trigger background NASA FIRMS sync job."""
+    return scheduler.trigger_firms_sync_now()
+
+
+@app.post("/api/v1/scheduler/trigger/weather")
+def trigger_weather_sync_job():
+    """Immediately trigger background weather sync job."""
+    return scheduler.trigger_weather_refresh_now()
+
+
+@app.on_event("startup")
+def startup_event():
+    """Initialize background ingestion scheduler on server boot."""
+    scheduler.start()
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    """Safely terminate background threads on server shutdown."""
+    scheduler.stop()
 
 # ----------------- Serve Frontend Static Files -----------------
 

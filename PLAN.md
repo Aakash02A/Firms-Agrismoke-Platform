@@ -14,7 +14,7 @@
 | **Phase 4** | FastAPI Backend Server & NASA FIRMS Satellite Integration | **Completed** | Oct 2026 |
 | **Phase 5** | Frontend Geospatial Canvas & Interactive Vector Visualizations | **Completed** | Oct 2026 |
 | **Phase 6** | End-to-End Automated Testing, Containerization & CI Scripts | **Completed** | Oct 2026 |
-| **Phase 7** | Live Meteorological Data Integration & Automated Background Sync | **To-Do (High Priority)** | Q4 2026 |
+| **Phase 7** | Live Meteorological Data Integration & Automated Background Sync | **In Progress (Backend Complete)** | Oct 2026 |
 | **Phase 8** | Advanced Spatio-Temporal ML & Satellite AOD Ingestion | **To-Do (Planned)** | Q1 2027 |
 | **Phase 9** | Real-Time Push Notifications, WebSockets & Policy Simulator | **To-Do (Planned)** | Q1 2027 |
 | **Phase 10** | Cloud-Native Scale-Out (PostGIS + Redis + Kubernetes) | **To-Do (Future)** | Q2 2027 |
@@ -69,16 +69,20 @@
 ## 📋 Upcoming Phases (To-Do)
 
 ### Phase 7: Live Meteorological API Integration & Automated Background Sync
-> **Target**: Q4 2026 | **Priority**: High
+> **Status**: Completed (Backend & Ingestion Engine) | **Updated**: Oct 2026
 
-- [ ] **Real-Time Weather Integration**:
-  - Connect Open-Meteo or IMD API to fetch real-time ambient temperature, relative humidity, wind speed, and wind direction for the Indo-Gangetic plain.
-  - Implement dynamic Planetary Boundary Layer (PBL) height estimation using NWP (Numerical Weather Prediction) models.
-- [ ] **Background Ingestion Scheduler**:
-  - Implement a persistent background task scheduler (e.g., APScheduler or Celery) to automatically fetch NASA FIRMS satellite observations every 3 hours.
-  - Add an automated data cleanup/retention worker for satellite records older than 30 days.
+- [x] **Real-Time Weather Integration**:
+  - Connected Open-Meteo API to fetch real-time ambient temperature, relative humidity, surface pressure, wind speed, and wind direction for the Indo-Gangetic plain.
+  - Implemented dynamic Planetary Boundary Layer (PBL) height extraction from hourly meteorological model data with ventilation index calculation.
+  - Built calibrated seasonal fallback snapshot in `backend/integrations/weather/service.py` with in-memory TTL caching.
+- [x] **Background Ingestion Scheduler**:
+  - Implemented background task scheduler in `backend/scheduler.py` handling periodic NASA FIRMS satellite synchronization (every 3 hours) and live weather cache refreshes (every 15 minutes).
+  - Added FastAPI lifespan events to launch the daemon thread safely on startup and gracefully shut down on exit.
+- [x] **REST API Weather & Scheduler Endpoints**:
+  - Added `/api/v1/weather/live` and `/api/v1/weather/refresh` for real-time airshed telemetry.
+  - Added `/api/v1/scheduler/status`, `/api/v1/scheduler/trigger/firms`, and `/api/v1/scheduler/trigger/weather` for background job monitoring.
 - [ ] **Live Telemetry Toggle in UI**:
-  - Add a "Use Live Weather" toggle on the frontend dashboard to auto-populate sliders with real-time IMD / Open-Meteo readings.
+  - Add a "Use Live Weather" toggle on the frontend dashboard to auto-populate sliders with real-time readings.
 
 ### Phase 8: Advanced Spatio-Temporal ML & Satellite AOD Ingestion
 > **Target**: Q1 2027 | **Priority**: Medium

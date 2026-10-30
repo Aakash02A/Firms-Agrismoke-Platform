@@ -139,7 +139,20 @@ def test_api_endpoints():
     assert isinstance(alerts_v1, list)
     print(f"[PASS] /api/v1/alerts -> Retrieved {len(alerts_v1)} lifecycle alert records")
 
-    print("=== Backend API & Data Delivery: ALL 18 ENDPOINTS PASSED! ===")
+    # 19. Test /api/v1/weather/live
+    weather_live = main.get_live_meteorology()
+    assert weather_live.temperature > -20.0 and weather_live.temperature < 60.0
+    assert weather_live.pblHeight >= 100
+    assert weather_live.ventilationIndex > 0
+    print(f"[PASS] /api/v1/weather/live -> Location: {weather_live.location}, Temp: {weather_live.temperature}C, Wind: {weather_live.windSpeed} km/h, PBL: {weather_live.pblHeight}m")
+
+    # 20. Test /api/v1/scheduler/status
+    sched_status = main.get_scheduler_status()
+    assert "isRunning" in sched_status
+    assert "firmsIntervalHours" in sched_status
+    print(f"[PASS] /api/v1/scheduler/status -> Running: {sched_status['isRunning']}, FIRMS Interval: {sched_status['firmsIntervalHours']}h, Weather Refreshes: {sched_status['totalWeatherRefreshes']}")
+
+    print("=== Backend API & Data Delivery: ALL 20 ENDPOINTS PASSED! ===")
 
 if __name__ == "__main__":
     test_api_endpoints()
