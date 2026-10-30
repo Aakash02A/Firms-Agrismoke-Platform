@@ -123,3 +123,4 @@
 1. When starting work on a new phase or feature, mark the item as in-progress.
 2. Ensure any new environment variables or secret keys are added to [`.env.example`](.env.example) and documented in [`agent.md`](agent.md).
 3. Always update automated test coverage in [`tests/`](tests/) and verify that `python tests/run_all_tests.py` passes 100% prior to closing any phase.
+
