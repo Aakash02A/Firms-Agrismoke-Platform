@@ -40,6 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let tickerInterval = null;
     let lastCalculatedPred = null;
     let lastCalculatedHourly = null;
+    let lastDataSync = 0;
+    let autoRefreshTimer = null;
 
     // Animated Numeric Counter for Fluid Real-Time Feedback
     function animateNumber(element, targetVal, duration = 350, decimals = 0, prefix = '', suffix = '') {
@@ -95,6 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabPanels = document.querySelectorAll('.tab-panel');
 
     function switchTab(tabId) {
+        // Remember the active tab so a page refresh keeps the user on the same view
+        try { localStorage.setItem('agrismoke.tab', tabId); } catch (e) {}
         navButtons.forEach(btn => {
             btn.classList.toggle('active', btn.getAttribute('data-tab') === tabId);
         });
@@ -290,6 +294,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function applyPredictionToUI(pred, hourly) {
         lastCalculatedPred = pred;
         lastCalculatedHourly = hourly;
+
+        // Keep the map's Delhi-NCR impact target in sync with the live reading
+        if (map && map.setTarget) map.setTarget(pred.predictedAqi, pred.categoryColor);
 
         // Update Key KPI Badges & Elements with smooth number animation
         const elAqi = document.getElementById('kpi-aqi-value');
@@ -1267,6 +1274,38 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Periodically re-pull genuinely live sources (NASA FIRMS + Open-Meteo) so the
+    // map and KPIs refresh on their own. Runs only while the tab is visible & online.
+    function updateMapLiveChip() {
+        const el = document.getElementById('map-live-updated');
+        if (!el) return;
+        if (!isBackendConnected) { el.textContent = 'offline simulation'; return; }
+        if (!lastDataSync) { el.textContent = 'connecting\u2026'; return; }
+        const d = new Date(lastDataSync);
+        const p = n => String(n).padStart(2, '0');
+        el.textContent = `updated ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    async function refreshLiveData() {
+        if (!isBackendConnected) { updateMapLiveChip(); return; }
+        if (document.visibilityState !== 'visible') return;
+        try {
+            const [wres, fres] = await Promise.all([
+                fetch(`${API_BASE}/api/v1/weather/live`).catch(() => null),
+                fetch(`${API_BASE}/api/v1/predict/live`).catch(() => null)
+            ]);
+            const upd = {};
+            if (wres && wres.ok) { const w = await wres.json(); upd.windSpeed = w.windSpeed; upd.windDirectionDeg = w.windDirectionDeg; upd.pblHeight = w.pblHeight; }
+            if (fres && fres.ok) { const f = await fres.json(); if (f.liveFiresDetected > 0) upd.fireCount = f.liveFiresDetected; }
+            if (Object.keys(upd).length) setInputsToUI(upd);
+            await loadDatabaseData();
+            lastDataSync = Date.now();
+            updateMapLiveChip();
+        } catch (e) {
+            console.log('[auto-refresh] skipped:', e);
+        }
+    }
+
     // 14. Check Backend API Connectivity & Hydrate Live Data
     async function checkBackendConnectivity() {
         const statusPill = document.querySelector('.status-pill');
@@ -1299,6 +1338,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Hydrate database data
                 loadDatabaseData();
+                lastDataSync = Date.now();
+                updateMapLiveChip();
+                if (!autoRefreshTimer) autoRefreshTimer = setInterval(refreshLiveData, 60000);
                 showNotification("Connected to Python FastAPI & SQLite Backend with trained ML model!", "success");
             }
         } catch (e) {
@@ -1362,6 +1404,18 @@ document.addEventListener('DOMContentLoaded', () => {
     syncInputsFromUI();
     updateVisualizations();
     checkBackendConnectivity();
+    updateMapLiveChip();
+
+    // Restore the last-viewed tab so a refresh keeps the user on the same page
+    try {
+        const savedTab = localStorage.getItem('agrismoke.tab');
+        if (savedTab && document.getElementById(`tab-${savedTab}`)) switchTab(savedTab);
+    } catch (e) {}
+
+    // Refresh live data immediately when the user returns to the tab
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && isBackendConnected) refreshLiveData();
+    });
 
     // Auto-start live simulation loop by default
     if (toggleLiveSim && toggleLiveSim.checked) {

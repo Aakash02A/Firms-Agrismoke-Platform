@@ -57,6 +57,10 @@ class AgriSmokeMapEngine {
         // Tooltip element
         this.tooltip = document.getElementById('map-tooltip');
 
+        // Delhi-NCR impact target (kept in sync from app.js via setTarget)
+        this.targetAqi = null;
+        this.targetColor = null;
+
         this.init();
     }
 
@@ -441,6 +445,7 @@ class AgriSmokeMapEngine {
         // 2. Draw Regional Boundaries & Geographical Features
         if (this.layers.boundaries) {
             this.drawGeographicalRegions();
+            this.drawDelhiTarget();
         }
 
         // 3. Draw Wind Vectors & Streamlines
@@ -839,38 +844,99 @@ class AgriSmokeMapEngine {
     drawMonitoringStations() {
         const ctx = this.ctx;
         DEMO_DATA.monitoringStations.forEach(st => {
+            if (st.lat == null || st.lng == null) return;
             const pos = this.geoToScreen(st.lat, st.lng);
             const color = this.getAqiColor(st.aqi);
             const isHovered = this.hoveredItem && this.hoveredItem.data.id === st.id;
+            const r = (isHovered ? 14 : 11) * this.scale;
 
             ctx.save();
 
-            // Pulse ring
-            ctx.strokeStyle = color;
-            ctx.lineWidth = isHovered ? 2.5 : 1.5;
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-
+            // Dark backing halo so the marker reads on any basemap
             ctx.beginPath();
-            ctx.arc(pos.x, pos.y, (isHovered ? 13 : 10) * this.scale, 0, Math.PI * 2);
+            ctx.arc(pos.x, pos.y, r + 3, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+            ctx.fill();
+
+            // AQI-coloured ring with light face
+            ctx.lineWidth = isHovered ? 2.5 : 1.8;
+            ctx.strokeStyle = color;
+            ctx.fillStyle = 'rgba(248, 250, 252, 0.96)';
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
 
-            // Center AQI indicator
+            // AQI value centred inside the ring (declutters the dense NCR cluster)
             ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, 4 * this.scale, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.font = `700 ${Math.max(9, 10 * this.scale)}px system-ui, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(st.aqi != null ? st.aqi : '--'), pos.x, pos.y + 0.5);
+            ctx.textBaseline = 'alphabetic';
 
-            // Station Tag
-            ctx.fillStyle = '#e2e8f0';
-            ctx.font = '600 10px system-ui, sans-serif';
-            ctx.textAlign = 'left';
-            ctx.shadowColor = '#000000';
-            ctx.shadowBlur = 5;
-            ctx.fillText(`${st.name.split(',')[0]} [${st.aqi}]`, pos.x + 12, pos.y + 3);
+            // Name label only when zoomed in or hovered, to avoid overlapping tags
+            if (isHovered || this.scale >= 1.5) {
+                ctx.fillStyle = '#e2e8f0';
+                ctx.font = '600 10px system-ui, sans-serif';
+                ctx.shadowColor = '#000000';
+                ctx.shadowBlur = 5;
+                ctx.fillText(`${st.name.split(',')[0]}`, pos.x, pos.y - r - 5);
+            }
 
             ctx.restore();
         });
+    }
+
+    // Sets the live Delhi-NCR impact-zone reading shown on the map.
+    setTarget(aqi, color) {
+        this.targetAqi = aqi;
+        this.targetColor = color;
+    }
+
+    drawDelhiTarget() {
+        const ctx = this.ctx;
+        const delhi = { lat: 28.6139, lng: 77.2090 };
+        const pos = this.geoToScreen(delhi.lat, delhi.lng);
+        if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return;
+
+        const t = Date.now() * 0.0016;
+        const pulse = 1 + Math.sin(t) * 0.12;
+        const baseR = 16 * this.scale;
+
+        ctx.save();
+        // Impact-zone concentric rings
+        ctx.strokeStyle = 'rgba(255, 61, 0, 0.6)';
+        ctx.lineWidth = 1.5;
+        for (let i = 1; i <= 2; i++) {
+            ctx.globalAlpha = 0.55 / i;
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, baseR * i * pulse, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+
+        // Target cross + core
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(pos.x - 6, pos.y); ctx.lineTo(pos.x + 6, pos.y);
+        ctx.moveTo(pos.x, pos.y - 6); ctx.lineTo(pos.x, pos.y + 6);
+        ctx.stroke();
+        ctx.fillStyle = this.targetColor || '#ff3d00';
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Label with the live AQI
+        ctx.fillStyle = '#fecaca';
+        ctx.font = '700 11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = '#000000';
+        ctx.shadowBlur = 5;
+        const aqiTxt = this.targetAqi != null ? ` \u2022 AQI ${Math.round(this.targetAqi)}` : '';
+        ctx.fillText(`DELHI-NCR IMPACT ZONE${aqiTxt}`, pos.x, pos.y + baseR * 2 + 14);
+        ctx.restore();
     }
 
     drawCompassAndScale() {

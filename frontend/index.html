@@ -268,6 +268,26 @@
 
                     <!-- Floating Interactive Hover Tooltip -->
                     <div id="map-tooltip" class="floating-tooltip"></div>
+
+                    <!-- Live status chip -->
+                    <div class="map-live-chip" id="map-live-chip">
+                        <span class="live-pulse-beacon"></span>
+                        <span>LIVE</span>
+                        <span class="map-live-sep">&bull;</span>
+                        <span id="map-live-updated">connecting&hellip;</span>
+                    </div>
+
+                    <!-- In-map legend -->
+                    <div class="map-legend">
+                        <div class="map-legend-title">Legend</div>
+                        <ul>
+                            <li><span class="lg-dot" style="background:#ff3d00"></span>Agri / fire cluster</li>
+                            <li><span class="lg-dot" style="background:#a855f7"></span>Industrial heat</li>
+                            <li><span class="lg-dot" style="background:#10b981"></span>Forest / wildland</li>
+                            <li><span class="lg-ring"></span>Delhi-NCR station (AQI)</li>
+                            <li><span class="lg-plume"></span>Smoke plume drift</li>
+                        </ul>
+                    </div>
                 </div>
 
                 <!-- Map Info Footer Bar -->
