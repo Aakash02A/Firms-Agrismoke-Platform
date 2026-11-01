@@ -9,7 +9,14 @@ import os
 from pathlib import Path
 
 DB_DIR = Path(__file__).resolve().parent
-DB_PATH = DB_DIR / "agri_smoke.db"
+# Honor the DB_PATH env override (used by containers/PaaS to point at a mounted
+# volume), keeping consistency with backend/database.py. Falls back to repo-local.
+_env_db = os.getenv("DB_PATH", "").strip()
+if _env_db:
+    DB_PATH = Path(_env_db).expanduser()
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+else:
+    DB_PATH = DB_DIR / "agri_smoke.db"
 SCHEMA_PATH = DB_DIR / "schema.sql"
 
 def get_db_connection():

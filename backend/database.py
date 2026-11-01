@@ -3,12 +3,18 @@ AgriSmoke AI - Database Access Layer
 Provides clean CRUD helpers and queries for the SQLite database.
 """
 
+import os
 import sqlite3
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-DB_PATH = Path(__file__).resolve().parent.parent / "database" / "agri_smoke.db"
+# Default to the repo-local SQLite file, but allow an env override (DB_PATH) so
+# PaaS/container deployments can point the database at a mounted, persistent
+# volume instead of the ephemeral app directory.
+_default_db = Path(__file__).resolve().parent.parent / "database" / "agri_smoke.db"
+DB_PATH = Path(os.getenv("DB_PATH", "").strip()).expanduser() if os.getenv("DB_PATH", "").strip() else _default_db
+
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)

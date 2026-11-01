@@ -1,0 +1,38 @@
+# ==============================================================================
+# AgriSmoke AI - Render Blueprint (Infrastructure as Code)
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Usage: push this repo to GitHub, then in the Render dashboard choose
+#        "New +" -> "Blueprint" and select this repo. Render reads this file.
+#
+# SECRETS: values marked isSecret are stored encrypted by Render and must be
+# entered in the Render dashboard (never committed here). See .env.example.
+# ==============================================================================
+
+services:
+  - type: web
+    name: agrismoke-ai
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    plan: starter                       # bump to standard for persistent disks
+    region: oregon                      # change to your nearest Render region
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production               # read-only + docs off + HSTS by default
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "10000"                  # Render routes external 443 -> this port
+      # Render-managed persistent volume so SQLite survives restarts.
+      - key: DB_PATH
+        value: /var/data/agri_smoke.db
+      - key: NASA_FIRMS_MAP_KEY
+        secret: true                    # set value in Render dashboard
+      - key: CORS_ORIGINS
+        value: ""                       # same-origin (frontend served by this app)
+    diskMounts:
+      - name: agrismoke-data
+        mountPath: /var/data
+        sizeGB: 1

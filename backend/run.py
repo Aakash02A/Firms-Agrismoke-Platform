@@ -28,11 +28,22 @@ for p in [str(ROOT_DIR), str(BACKEND_DIR), str(AI_ML_DIR)]:
 
 # Import app object directly
 from main import app
+from app_config import config
 
 if __name__ == "__main__":
     print("=" * 65)
     print(">> Starting AgriSmoke AI Python Backend Server")
-    print(">> Web Dashboard: http://127.0.0.1:8000")
-    print(">> Interactive Swagger API Docs: http://127.0.0.1:8000/docs")
+    print(">> Environment: " + config.environment)
+    print(f">> Binding {config.host}:{config.port} "
+          f"(docs={'on' if config.docs_enabled else 'off'}, "
+          f"read-only={'yes' if config.read_only else 'no'})")
     print("=" * 65)
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(
+        app,
+        host=config.host,
+        port=config.port,
+        log_level="info",
+        reload=False,
+        proxy_headers=config.proxy_headers,
+        forwarded_allow_ips=config.forwarded_allow_ips,
+    )

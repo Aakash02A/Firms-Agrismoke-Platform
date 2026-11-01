@@ -7,13 +7,16 @@ real-time prediction API, and static frontend delivery.
 import sys
 import io
 import csv
+import time
+import logging
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 # Ensure root and ai-ml paths are in sys.path
@@ -39,6 +42,7 @@ except ImportError:
 
 from model_inference import predictor
 import database as db
+from app_config import config
 from backend.integrations.weather import weather_service, LiveWeatherSnapshot
 from backend.integrations.air_quality import air_quality_service
 from backend.scheduler import scheduler
@@ -50,20 +54,119 @@ from backend.policy_simulator import (
 )
 from backend.alerts_dispatcher import alert_engine, CONFIGURED_CHANNELS, DISPATCH_LOGS
 
+logger = logging.getLogger("agri_smoke.api")
+
+# Interactive docs (Swagger/ReDoc) are exposed only outside production, or when
+# explicitly re-enabled via DOCS_ENABLED=true. In prod the API surface stays closed.
 app = FastAPI(
     title="AgriSmoke AI API",
     description="Backend API with SQLite & Atmospheric Machine Learning for Indo-Gangetic Airshed AQI Predictions",
-    version="2.0.0"
+    version="2.0.0",
+    docs_url="/docs" if config.docs_enabled else None,
+    redoc_url="/redoc" if config.docs_enabled else None,
+    openapi_url="/openapi.json" if config.docs_enabled else None,
 )
 
-# CORS Middleware (allows cross-origin requests from frontend on any port/file origin)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# CORS: locked to explicit origins from config. We never combine a wildcard
+# origin with credentials (invalid + unsafe). Same-origin hosting needs no CORS.
+if config.cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+# ----------------- Security Middleware -----------------
+
+# Content-Security-Policy tuned for this vanilla-JS app: only self-hosted scripts
+# (no inline <script>, no third-party JS), Google Fonts for styles/fonts, and
+# same-origin data/API/WebSocket connections. Inline style *attributes* are used
+# across the markup, hence style-src 'unsafe-inline'.
+CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "manifest-src 'self'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'; "
+    "object-src 'none'"
 )
+
+MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Stateless compute allowed through read-only mode (does not write to the DB).
+READ_ONLY_ALLOWED_POST_PATHS = {"/api/predict"}
+# Expensive ML/report endpoints subject to per-client rate limiting.
+RATE_LIMITED_PREFIXES = ("/api/predict", "/api/forecast", "/api/v1/forecast", "/api/v1/predict", "/api/export")
+_rate_buckets: Dict[tuple, deque] = defaultdict(deque)
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _is_rate_limited(ip: str, path: str) -> bool:
+    window = 60.0
+    limit = max(1, config.rate_limit_per_minute)
+    key = (ip, path)
+    now = time.time()
+    bucket = _rate_buckets[key]
+    while bucket and now - bucket[0] > window:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        return True
+    bucket.append(now)
+    return False
+
+
+@app.middleware("http")
+async def security_and_guard_middleware(request: Request, call_next):
+    path = request.url.path
+
+    # 1. Read-only gate: reject state-changing calls to non-compute endpoints.
+    if config.read_only and request.method in MUTATING_METHODS and path not in READ_ONLY_ALLOWED_POST_PATHS:
+        if path.startswith("/api"):
+            return JSONResponse(
+                status_code=405,
+                content={"error": "This deployment is read-only. Write operations are disabled."},
+                headers={"Content-Security-Policy": CSP_POLICY},
+            )
+
+    # 2. Rate limit expensive endpoints.
+    if config.rate_limit_enabled and path.startswith(RATE_LIMITED_PREFIXES) and _is_rate_limited(_client_ip(request), path):
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limit exceeded. Please slow down."},
+            headers={"Retry-After": "60", "Content-Security-Policy": CSP_POLICY},
+        )
+
+    response = await call_next(request)
+
+    # 3. Baseline security headers on every response.
+    response.headers["Content-Security-Policy"] = CSP_POLICY
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if config.is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log the real traceback server-side; never leak internals to clients in prod."""
+    logger.exception("Unhandled error on %s %s: %s", request.method, request.url.path, exc)
+    detail = "Internal server error" if config.is_production else f"{type(exc).__name__}: {exc}"
+    return JSONResponse(status_code=500, content={"error": detail})
 
 # ----------------- Request / Response Models -----------------
 
@@ -83,6 +186,12 @@ class ThresholdUpdateRequest(BaseModel):
     fires: int = Field(ge=50, le=10000)
 
 # ----------------- API Endpoints -----------------
+
+@app.get("/api/health")
+def health_check():
+    """Lightweight liveness probe for PaaS/load balancers (no external calls)."""
+    return {"status": "ok", "environment": config.environment}
+
 
 @app.get("/api/status")
 def get_system_status():
@@ -197,11 +306,13 @@ def run_prediction(req: PredictionRequest):
     pred = predictor.predict(params)
     hourly = predictor.generate_hourly_forecast(params)
 
-    # Save to SQLite simulation history asynchronously/synchronously
-    try:
-        db.save_simulation_run(params, pred)
-    except Exception as e:
-        print(f"[Warning] Failed to record simulation to DB: {e}")
+    # Persist simulation history only when writes are permitted (read-only
+    # production skips this and just returns the stateless prediction).
+    if not config.read_only:
+        try:
+            db.save_simulation_run(params, pred)
+        except Exception as e:
+            logger.warning("Failed to record simulation to DB: %s", e)
 
     return {
         "prediction": pred,
@@ -642,5 +753,12 @@ if FRONTEND_DIR.exists():
 # ----------------- Run Standalone -----------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host=config.host,
+        port=config.port,
+        reload=config.reload_enabled,
+        proxy_headers=config.proxy_headers,
+        forwarded_allow_ips=config.forwarded_allow_ips,
+    )
 

@@ -13,8 +13,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let map = null;
 
     // Backend API Base Configuration
-    const isLocalBackend = window.location.protocol.startsWith('http') && (window.location.port === '8000');
-    const API_BASE = isLocalBackend ? '' : 'http://127.0.0.1:8000';
+    // When the app is served over http(s) (locally via the FastAPI backend on any
+    // port, or in production on Render), the API is same-origin -> empty base.
+    // Only fall back to an explicit localhost origin when opened from file://.
+    // A deployment may override this by setting window.API_BASE before app.js loads.
+    const servedOverHttp = window.location.protocol.startsWith('http');
+    const API_BASE = (typeof window.API_BASE === 'string')
+        ? window.API_BASE
+        : (servedOverHttp ? '' : 'http://127.0.0.1:8000');
     let isBackendConnected = false;
     let predictDebounceTimer = null;
 

@@ -14,12 +14,17 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PORT=8000
+      - HOST=0.0.0.0
+      - ENVIRONMENT=${ENVIRONMENT:-production}
       - REDIS_URL=redis://redis:6379/0
+      # NASA FIRMS key is read from the host env / .env, never committed here.
+      - NASA_FIRMS_MAP_KEY=${NASA_FIRMS_MAP_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
     depends_on:
       redis:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -29,8 +34,9 @@ services:
     image: redis:7-alpine
     container_name: agri_smoke_redis
     restart: unless-stopped
+    # Bound to localhost only - not reachable from the public internet.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
@@ -40,12 +46,13 @@ services:
     image: postgis/postgis:16-3.4-alpine
     container_name: agri_smoke_postgis
     restart: unless-stopped
+    # Bound to localhost only. Supply POSTGRES_PASSWORD via env / .env file.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
-      - POSTGRES_USER=agrismoke
-      - POSTGRES_PASSWORD=agrismoke_secret
-      - POSTGRES_DB=agrismoke_db
+      - POSTGRES_USER=${POSTGRES_USER:-agrismoke}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env or shell}
+      - POSTGRES_DB=${POSTGRES_DB:-agrismoke_db}
     volumes:
       - postgis_data:/var/lib/postgresql/data
       - ../database/schema_postgres_postgis.sql:/docker-entrypoint-initdb.d/init.sql
