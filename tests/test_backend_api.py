@@ -29,9 +29,10 @@ def test_api_endpoints():
     assert all("name" in s and "aqi" in s and "paraliPct" in s for s in stations)
     print(f"[PASS] /api/stations -> Retrieved {len(stations)} stations (Top: {stations[0]['name']} - {stations[0]['aqi']} AQI)")
 
-    # 3. Test /api/hotspots
+    # 3. Test /api/hotspots (live NASA FIRMS returns one row per district with active
+    # detections, so the count varies day-to-day — assert schema + a sane range)
     hotspots = main.get_hotspots()
-    assert len(hotspots) == 10
+    assert 0 < len(hotspots) <= 40
     assert all("district" in h and "fireCount" in h and "avgFRP" in h for h in hotspots)
     print(f"[PASS] /api/hotspots -> Retrieved {len(hotspots)} fire hotspots (Top: {hotspots[0]['district']} - {hotspots[0]['fireCount']} fires)")
 
@@ -40,9 +41,10 @@ def test_api_endpoints():
     assert len(trends) == 7
     print(f"[PASS] /api/trends/weekly -> Retrieved {len(trends)} historical records")
 
-    # 5. Test /api/districts
+    # 5. Test /api/districts (live FIRMS-backed ranking, row count varies day-to-day)
     districts = main.get_district_rankings()
-    assert len(districts) == 10
+    assert 0 < len(districts) <= 40
+    assert all("district" in d and "fires" in d for d in districts)
     print(f"[PASS] /api/districts -> Retrieved {len(districts)} district rankings")
 
     # 6. Test /api/grap

@@ -184,8 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (valWindSpeed) valWindSpeed.textContent = `${currentInputs.windSpeed.toFixed(1)} km/h`;
         if (valWindDir) {
             const dirLabel = getCompassDirection(currentInputs.windDirectionDeg);
-            valWindDir.textContent = `${currentInputs.windDirectionDeg}° (${dirLabel})`;
-            if (compassWindLabel) compassWindLabel.textContent = dirLabel;
+            valWindDir.innerHTML = `${currentInputs.windDirectionDeg}&deg; (<span id="compass-wind-label">${dirLabel}</span>)`;
         }
         if (valPbl) valPbl.textContent = `${currentInputs.pblHeight} m`;
         if (valUrbanBase) valUrbanBase.textContent = `${currentInputs.urbanBaselineAqi} AQI`;
@@ -268,6 +267,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Plain-language banner, rebuilt in the active language (see i18n.js)
+    function renderPlainSummary(pred) {
+        const elSummary = document.getElementById('kpi-plain-summary');
+        const p = pred || lastCalculatedPred;
+        if (!elSummary || !p) return;
+        const fill = (tpl, vars) => Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), tpl);
+        const catKey = `cat.${p.category}`;
+        const catText = (window.I18N && I18N.t(catKey)) || p.category.toLowerCase();
+        const smokeShare = Math.round(p.paraliPct);
+        const causeTpl = smokeShare >= 20 ? 'summary.causesHigh' : 'summary.causesLocal';
+        const cause = fill((window.I18N && I18N.t(causeTpl)) || (smokeShare >= 20
+            ? 'About {pct}% of it is coming from farm-stubble smoke drifting in from Punjab and Haryana.'
+            : 'Most of it is from local sources like traffic, dust and industry.'), { pct: smokeShare });
+        elSummary.textContent = fill((window.I18N && I18N.t('summary.main')) || "Delhi-NCR's air quality is {cat} right now. {cause}", { cat: catText, cause });
+        elSummary.style.borderLeftColor = p.categoryColor;
+    }
+
+    // Re-render dynamic sentences (plain summary) when the language flips
+    document.addEventListener('agris:language', () => renderPlainSummary(lastCalculatedPred));
+
     function applyPredictionToUI(pred, hourly) {
         lastCalculatedPred = pred;
         lastCalculatedHourly = hourly;
@@ -305,6 +324,9 @@ document.addEventListener('DOMContentLoaded', () => {
             elGrapBadge.className = `badge grap-badge ${pred.grapStage.toLowerCase().replace(' ', '-')}`;
         }
 
+        // Plain-language situation summary (for non-technical readers)
+        renderPlainSummary(pred);
+
         // Update Calculator Results Card
         const calcAqi = document.getElementById('calc-res-aqi');
         const calcPm25 = document.getElementById('calc-res-pm25');
@@ -341,6 +363,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Update Dynamic GRAP Matrix tab
         updateGrapMatrixCards(pred);
+
+        // Generate the live early-warning feed and the policy what-if table from current data
+        renderAlertFeed();
+        renderPolicyScenarios();
 
         // Update Charts
         if (hourly && hourly.length) {
@@ -382,6 +408,136 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         });
+    }
+
+    // Builds the "Latest warnings" feed from live fires, weather and the 24-hour forecast.
+    function renderAlertFeed() {
+        const container = document.getElementById('alerts-stream');
+        if (!container) return;
+        const p = lastCalculatedPred;
+        if (!p) return;
+        const hourly = lastCalculatedHourly || [];
+        const alerts = [];
+
+        // Peak AQI and lowest mixing height across the next 24 hours
+        let peak = { aqi: p.predictedAqi, time: 'today' };
+        let minPbl = { pbl: currentInputs.pblHeight, time: 'tonight' };
+        hourly.forEach(h => {
+            if (h.aqi > peak.aqi) peak = { aqi: h.aqi, time: h.time };
+            if (h.pbl < minPbl.pbl) minPbl = { pbl: h.pbl, time: h.time };
+        });
+
+        // Districts with the most live fires (from NASA FIRMS-backed data)
+        const districts = (DEMO_DATA.districtFireCounts || []).slice()
+            .sort((a, b) => (b.fires || b.fireCount || 0) - (a.fires || a.fireCount || 0));
+        const topDistricts = districts.slice(0, 3).map(d => d.district).filter(Boolean);
+        const districtStr = topDistricts.length ? topDistricts.join(', ') : 'upwind farm districts';
+
+        const dirLabel = getCompassDirection(currentInputs.windDirectionDeg);
+        const smokeShare = Math.round(p.paraliPct);
+        const whoTimes = Math.max(1, Math.round(p.totalPm25 / 15));
+
+        // 1. Farm-smoke transport (only when stubble smoke is actually influencing the air)
+        if (smokeShare >= 15 || currentInputs.fireCount >= 300) {
+            const sev = peak.aqi > 440 ? 'critical' : (peak.aqi > 350 ? 'warning' : 'advisory');
+            alerts.push({
+                sev,
+                title: `Farm smoke moving in &bull; winds from the ${dirLabel}`,
+                detail: `Satellites count ${currentInputs.fireCount.toLocaleString()} active fires across ${districtStr}. ${dirLabel} winds at ${currentInputs.windSpeed.toFixed(1)} km/h are carrying smoke toward Delhi, projected to peak near AQI ${peak.aqi} around ${peak.time}.`,
+                action: `What to do: ${p.grapStage && p.grapStage !== 'None' ? `Prepare ${p.grapStage} measures early; ` : ''}ask children, older adults and people with lung or heart conditions to stay indoors.`
+            });
+        }
+
+        // 2. Overnight temperature inversion / smoke trapping
+        if (minPbl.pbl <= 300) {
+            alerts.push({
+                sev: minPbl.pbl <= 200 ? 'warning' : 'advisory',
+                title: 'Overnight smoke trapping (temperature inversion)',
+                detail: `Tonight the air's mixing layer is forecast to shrink to about ${Math.round(minPbl.pbl)} m near ${minPbl.time}. Smoke from farm fires and city traffic will stay trapped close to the ground until morning.`,
+                action: 'What to do: Run water sprinklers and mist cannons along busy corridors; avoid outdoor exercise in the early morning.'
+            });
+        }
+
+        // 3. Fine-particle health advisory (from live PM2.5)
+        if (p.totalPm25 > 60) {
+            alerts.push({
+                sev: p.totalPm25 > 150 ? 'critical' : (p.totalPm25 > 90 ? 'warning' : 'advisory'),
+                title: 'Fine-particle health advisory',
+                detail: `Fine particles (PM2.5) are around ${Math.round(p.totalPm25)} \u00b5g/m\u00b3 \u2014 about ${whoTimes} times the WHO safe limit (15 \u00b5g/m\u00b3).`,
+                action: p.predictedAqi > 400
+                    ? 'What to do: Wear an N95 mask outdoors, run HEPA purifiers indoors, and keep sensitive groups inside.'
+                    : 'What to do: Wear an N95 mask outdoors; run HEPA purifiers indoors.'
+            });
+        }
+
+        // 4. GRAP stage that this air-quality level legally triggers
+        if (p.grapStage && p.grapStage !== 'None') {
+            alerts.push({
+                sev: (p.grapStage.includes('III') || p.grapStage.includes('IV')) ? 'critical' : 'warning',
+                title: `${p.grapStage} rules apply at this level`,
+                detail: `With AQI in the \u201c${p.category}\u201d range (${p.predictedAqi}), Delhi's graded GRAP response calls for ${p.grapStage} restrictions.`,
+                action: 'What to do: Authorities should enforce the stage-specific bans listed in the grid above.'
+            });
+        }
+
+        // All-clear fallback so the feed is never empty
+        if (!alerts.length) {
+            alerts.push({
+                sev: 'advisory',
+                title: 'Air quality currently within safer limits',
+                detail: `Delhi-NCR AQI is around ${p.predictedAqi} (${p.category}) with ${currentInputs.fireCount.toLocaleString()} satellite fire detections upwind. No emergency thresholds are crossed right now.`,
+                action: 'What to do: No special action needed. Keep an eye on the 24-hour forecast as conditions change.'
+            });
+        }
+
+        const now = new Date();
+        const stamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} IST`;
+
+        container.innerHTML = alerts.map(a => `
+            <div class="alert-item ${a.sev}">
+                <div class="alert-item-header">
+                    <span class="alert-item-title">${a.title}</span>
+                    <span class="alert-item-time">${stamp}</span>
+                </div>
+                <div class="alert-item-detail">${a.detail}</div>
+                <span class="alert-item-action">${a.action}</span>
+            </div>`).join('');
+    }
+
+    // Computes the policy "what-if" table by re-running the model at different adoption levels,
+    // holding the current live fires and weather fixed.
+    function renderPolicyScenarios() {
+        const body = document.getElementById('policy-scenario-body');
+        if (!body) return;
+
+        // Business-as-usual baseline: today's conditions with no burn-prevention adopted
+        const base = { ...currentInputs, bioDecomposerAdoption: 0, happySeederAdoption: 0 };
+        const baseline = model.predict(base);
+
+        const scenarios = [
+            { label: 'No change (burning continues)', bio: 0, happy: 0, accent: true },
+            { label: 'Half of farms get machine subsidies & free bio-spray', bio: 50, happy: 50 },
+            { label: 'Most farms use machines + stubble collection everywhere', bio: 85, happy: 85 }
+        ];
+
+        body.innerHTML = scenarios.map(s => {
+            const pred = model.predict({ ...base, bioDecomposerAdoption: s.bio, happySeederAdoption: s.happy });
+            const firesStopped = Math.max(0, Math.round(baseline.effectiveFires - pred.effectiveFires));
+            const pmDelta = Math.round((pred.totalPm25 - baseline.totalPm25) * 10) / 10;
+            const firesText = firesStopped > 0 ? `~${firesStopped.toLocaleString()} fires/day` : '0';
+            const deltaText = pmDelta < 0
+                ? `-${Math.abs(pmDelta).toFixed(0)} \u00b5g/m\u00b3`
+                : `Baseline (+${Math.round(baseline.stubblePm25)} \u00b5g/m\u00b3 from farm smoke)`;
+            const stageText = pred.grapStage && pred.grapStage !== 'None' ? pred.grapStage : 'Normal';
+            const goodColor = 'var(--cpcb-good)';
+            return `<tr style="border-bottom:1px solid var(--border-color);">
+                <td style="padding:11px 14px;color:${s.accent ? 'var(--accent-orange)' : 'var(--text-primary)'};font-weight:${s.accent ? '600' : '500'};">${s.label}</td>
+                <td style="padding:11px 14px;color:${firesStopped > 0 ? goodColor : 'var(--text-secondary)'};font-weight:600;">${firesText}</td>
+                <td style="padding:11px 14px;color:${pmDelta < 0 ? goodColor : 'var(--text-secondary)'};font-weight:600;">${deltaText}</td>
+                <td style="padding:11px 14px;color:${pred.categoryColor};font-weight:700;">${pred.predictedAqi} (${pred.category})</td>
+                <td style="padding:11px 14px;"><span class="badge">${stageText}</span></td>
+            </tr>`;
+        }).join('');
     }
 
     function updateHealthAdvisory(pred) {
@@ -631,7 +787,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showNotification("Diagnostic CSV Report successfully generated and downloaded.", "success");
     }
 
-    // 11. Print Briefing View with Official Executive Template Population
+    // 11. Print Report View with Public Air-Quality Briefing Template Population
     document.getElementById('btn-print-report')?.addEventListener('click', () => {
         populatePrintBriefingTemplate();
         setTimeout(() => {
