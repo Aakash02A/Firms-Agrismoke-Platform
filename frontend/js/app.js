@@ -667,6 +667,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (elHash) {
             elHash.textContent = `AGRI-${Math.random().toString(36).substring(2, 7).toUpperCase()}-NCR`;
         }
+        const elSrc = document.getElementById('print-data-source');
+        if (elSrc) {
+            elSrc.textContent = isBackendConnected
+                ? "LIVE \u2014 NASA FIRMS VIIRS + Open-Meteo"
+                : "Standalone Simulation (offline)";
+        }
 
         // Section 1: KPI Snapshot
         const pAqi = document.getElementById('print-kpi-aqi');
@@ -780,13 +786,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const topStations = DEMO_DATA.monitoringStations.slice(0, 6);
             pStationsTbody.innerHTML = topStations.map(st => `
                 <tr>
-                    <td><strong>${st.name}</strong></td>
-                    <td>${st.type}</td>
-                    <td><strong>${st.aqi}</strong></td>
-                    <td>${st.category}</td>
-                    <td>${st.pm25}</td>
-                    <td>${st.pm10}</td>
-                    <td><strong>${st.paraliPct}%</strong></td>
+                    <td><strong>${st.name || '\u2014'}</strong></td>
+                    <td>${st.type || '\u2014'}</td>
+                    <td><strong>${st.aqi != null ? st.aqi : '\u2014'}</strong></td>
+                    <td>${st.category || '\u2014'}</td>
+                    <td>${st.pm25 != null ? st.pm25 : '\u2014'}</td>
+                    <td>${st.pm10 != null ? st.pm10 : '\u2014'}</td>
+                    <td><strong>${st.paraliPct != null ? st.paraliPct + '%' : '\u2014'}</strong></td>
                 </tr>
             `).join('');
         }
@@ -797,12 +803,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const topFires = DEMO_DATA.fireHotspots.slice(0, 6);
             pHotspotsTbody.innerHTML = topFires.map(f => `
                 <tr>
-                    <td><strong>${f.district}</strong></td>
-                    <td>${f.state}</td>
-                    <td><strong>${f.fireCount} fires</strong></td>
-                    <td>${f.avgFRP} MW</td>
-                    <td>${f.harvestProgress}</td>
-                    <td>${f.smokeIntensity} Plume Inflow</td>
+                    <td><strong>${f.district || '\u2014'}</strong></td>
+                    <td>${f.state || '\u2014'}</td>
+                    <td><strong>${f.fireCount != null ? f.fireCount + ' fires' : '\u2014'}</strong></td>
+                    <td>${f.avgFRP != null ? f.avgFRP + ' MW' : '\u2014'}</td>
+                    <td>${f.harvestProgress || '\u2014'}</td>
+                    <td>${f.smokeIntensity ? f.smokeIntensity + ' Plume Inflow' : '\u2014'}</td>
                 </tr>
             `).join('');
         }

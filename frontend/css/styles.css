@@ -1247,17 +1247,10 @@ input[type="range"]::-moz-range-thumb {
         print-color-adjust: exact !important;
     }
 
-    .app-container,
-    .site-header,
-    .demo-banner,
-    .alert-trigger-banner,
-    .nav-tabs,
-    .tab-panel,
+    .app-shell,
     .modal-overlay,
     .floating-tooltip,
-    .toast-container,
-    .btn,
-    button {
+    .toast-container {
         display: none !important;
     }
 
@@ -1293,6 +1286,57 @@ input[type="range"]::-moz-range-thumb {
 
     .print-brand {
         flex: 1;
+    }
+
+    .print-logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 6px;
+    }
+
+    .print-logo-mark {
+        width: 36px;
+        height: 36px;
+        flex: 0 0 36px;
+        border-radius: 9px;
+        background: #dcfce7;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .print-logo-mark svg {
+        width: 21px;
+        height: 21px;
+        stroke: #0f766e;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    .print-logo-text {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.15;
+    }
+
+    .print-logo-text strong {
+        font-size: 13.5pt;
+        font-weight: 800;
+        color: #0f766e;
+        letter-spacing: .2px;
+    }
+
+    .print-logo-text small {
+        font-size: 7.5pt;
+        color: #475569;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .6px;
     }
 
     .print-brand-badge {

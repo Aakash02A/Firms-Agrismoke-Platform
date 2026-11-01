@@ -844,24 +844,30 @@
             <p>AgriSmoke AI &bull; Indo-Gangetic Crop Burning &amp; Urban Air Quality Prediction System</p>
             <p style="margin-top:2px;">Compliant with Central Pollution Control Board (CPCB) NAAQS &bull; Designed for environmental agencies &amp; research</p>
         </footer>
-    </div>
+    </div><!-- /.main-scroll -->
+        </div><!-- /.main-area -->
+    </div><!-- /.app-shell -->
 
     <!-- =========================================================================
          OFFICIAL EXECUTIVE AIR QUALITY BRIEFING TEMPLATE (PRINT ONLY)
-         Formatted specifically for clean, professional A4 / Letter PDF export.
+         Body-level sibling of .app-shell so printing shows ONLY this report.
          ========================================================================= -->
     <div id="print-report-container" class="print-report-template" aria-hidden="true">
         <!-- Document Header -->
         <header class="print-header">
             <div class="print-header-top">
                 <div class="print-brand">
-                    <span class="print-brand-badge">AGRISMOKE AI &bull; ENVIRONMENTAL INTELLIGENCE</span>
+                    <div class="print-logo">
+                        <span class="print-logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg></span>
+                        <span class="print-logo-text"><strong>AgriSmoke AI</strong><small>Airshed Intelligence Platform</small></span>
+                    </div>
                     <h1 class="print-title">EXECUTIVE AIR QUALITY ASSESSMENT &amp; SMOKE DISPERSION BRIEFING</h1>
                     <div class="print-subtitle">Indo-Gangetic Airshed Corridor (Punjab, Haryana &amp; Delhi-NCR)</div>
                 </div>
                 <div class="print-meta-box">
                     <div class="print-meta-row"><strong>Document ID:</strong> <span id="print-report-id">NCR-ENV-2026-A1</span></div>
-                    <div class="print-meta-row"><strong>Issued:</strong> <span id="print-timestamp">2026-10-29 10:30 IST</span></div>
+                    <div class="print-meta-row"><strong>Issued:</strong> <span id="print-timestamp">&mdash;</span></div>
+                    <div class="print-meta-row"><strong>Data Source:</strong> <span id="print-data-source">Standalone Simulation</span></div>
                     <div class="print-meta-row"><strong>Status:</strong> <span class="print-tag-official">OFFICIAL BRIEFING</span></div>
                     <div class="print-meta-row"><strong>Model:</strong> <span id="print-model-name">Physics-Informed ML (GradientBoosting R²=0.9886)</span></div>
                 </div>
@@ -1163,9 +1169,7 @@
                 <span>System Generated Telemetry &bull; Verification Hash: <code id="print-auth-hash">AGRI-7F3A-NCR</code></span>
             </div>
         </footer>
-            </div><!-- /.main-scroll -->
-        </div><!-- /.main-area -->
-    </div><!-- /.app-shell -->
+    </div><!-- /#print-report-container -->
 
     <!-- Interactive Item Modal Dialog -->
     <div id="detail-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
