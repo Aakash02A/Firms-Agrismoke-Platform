@@ -4,7 +4,19 @@ Handles environment variable loading, bounds validation, and sensor catalog.
 """
 
 import os
+from pathlib import Path
 from typing import Dict, Any, Tuple
+
+# Ensure the project-root .env is loaded for any code path that imports this
+# package directly (e.g. the background scheduler or tests) rather than via
+# backend/main.py. load_dotenv() is idempotent and will not override already-set
+# OS environment variables. Graceful if python-dotenv is not installed.
+try:
+    from dotenv import load_dotenv
+    _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+    load_dotenv(_PROJECT_ROOT / ".env")
+except ImportError:
+    pass
 
 SUPPORTED_SENSORS = [
     "VIIRS_NOAA20_NRT",

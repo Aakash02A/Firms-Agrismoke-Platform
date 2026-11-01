@@ -379,6 +379,87 @@ def get_district_fire_summary(days: int = 3) -> List[Dict[str, Any]]:
         return results
 
 
+def _smoke_intensity_from_count(count: int) -> str:
+    if count >= 300:
+        return "Very High"
+    if count >= 150:
+        return "High"
+    if count >= 60:
+        return "Moderate"
+    return "Low"
+
+
+def get_live_fire_hotspots(days: int = 3) -> List[Dict[str, Any]]:
+    """
+    Derive active fire hotspots by aggregating REAL NASA FIRMS observations
+    (last `days` days) by district. Returns [] when no live observations exist,
+    allowing the caller to fall back to the seeded placeholder hotspots.
+    Output shape mirrors get_fire_hotspots() so the frontend needs no changes.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                district,
+                state,
+                COUNT(*)                AS fire_count,
+                COALESCE(AVG(frp), 0.0) AS avg_frp,
+                AVG(latitude)           AS lat,
+                AVG(longitude)          AS lng,
+                COALESCE(AVG(confidence_score), 0.6) AS avg_conf,
+                MAX(acquisition_timestamp)           AS latest_acq
+            FROM fire_observations
+            WHERE acq_date >= date('now', '-' || ? || ' days')
+              AND district IS NOT NULL
+            GROUP BY district, state
+            ORDER BY fire_count DESC
+        """, (days,))
+        rows = cursor.fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            count = int(d["fire_count"])
+            results.append({
+                "id": f"live_{(d['district'] or 'region').lower().replace(' ', '_')}",
+                "district": d["district"],
+                "state": d["state"],
+                "lat": round(d["lat"], 4),
+                "lng": round(d["lng"], 4),
+                "fire_count": count,
+                "avg_frp": round(d["avg_frp"], 1),
+                "status": "Live satellite detection",
+                "harvest_progress": "Live (FIRMS)",
+                "confidence": f"{round(d['avg_conf'] * 100)}% (VIIRS)",
+                "smoke_intensity": _smoke_intensity_from_count(count),
+                "fireCount": count,
+                "avgFRP": round(d["avg_frp"], 1),
+                "harvestProgress": "Live (FIRMS)",
+                "smokeIntensity": _smoke_intensity_from_count(count),
+                "live": True,
+                "latestAcquisition": d["latest_acq"],
+            })
+        return results
+
+
+def get_live_district_fire_counts(days: int = 3) -> List[Dict[str, Any]]:
+    """
+    District-wise live fire counts derived from REAL NASA FIRMS observations.
+    Returns [] when no live data exists, so the caller can fall back to seed data.
+    Output shape mirrors get_district_fire_counts() ({district, fires, state}).
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT district AS district, state, COUNT(*) AS fires
+            FROM fire_observations
+            WHERE acq_date >= date('now', '-' || ? || ' days')
+              AND district IS NOT NULL
+            GROUP BY district, state
+            ORDER BY fires DESC
+        """, (days,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def record_sync_job(
     provider_id: str,
     status: str,

@@ -77,7 +77,7 @@ class IngestionScheduler:
                     config = FirmsConfig()
                     if config.is_configured:
                         service = FirmsIngestionService(config)
-                        service.run_sync()
+                        service.ingest_observations()
                         self.total_firms_jobs += 1
                         self.last_firms_sync = now_dt.isoformat()
                         self.next_firms_sync = (now_dt + timedelta(seconds=self.firms_interval)).isoformat()
@@ -102,7 +102,7 @@ class IngestionScheduler:
         from backend.integrations.nasa_firms import FirmsConfig, FirmsIngestionService
         config = FirmsConfig()
         service = FirmsIngestionService(config)
-        summary = service.run_sync()
+        summary = service.ingest_observations()
         self.last_firms_sync = datetime.now(timezone.utc).isoformat()
         self.total_firms_jobs += 1
         return summary.model_dump() if hasattr(summary, "model_dump") else summary.dict()

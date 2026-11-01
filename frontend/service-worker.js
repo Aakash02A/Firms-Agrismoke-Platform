@@ -1,10 +1,10 @@
 /**
  * AgriSmoke AI - Service Worker
  * Enables offline execution for field monitoring officers in rural agricultural zones.
- * Employs a Cache-First strategy for static assets and Network-First for API calls.
+ * Employs a Network-First strategy for static assets (always fresh when online) and Network-First for API calls, both with cache fallback for offline field use.
  */
 
-const CACHE_NAME = 'agrismoke-v2.1';
+const CACHE_NAME = 'agrismoke-v3.0';
 const STATIC_ASSETS = [
     'index.html',
     'css/styles.css',
@@ -53,20 +53,15 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Static Assets: Cache-First strategy
+    // Static Assets: Network-First (always fresh on localhost) with Cache Fallback (offline)
     event.respondWith(
-        caches.match(event.request).then((cachedResponse) => {
-            if (cachedResponse) {
-                return cachedResponse;
+        fetch(event.request).then((response) => {
+            if (response && response.status === 200) {
+                const copy = response.clone();
+                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
             }
-            return fetch(event.request).then((response) => {
-                if (response.status === 200) {
-                    const copy = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-                }
-                return response;
-            });
-        })
+            return response;
+        }).catch(() => caches.match(event.request))
     );
 });
 

@@ -16,65 +16,79 @@
 </head>
 
 <body>
-    <div class="app-container">
-        <!-- Site Header & Navigation Bar -->
-        <header class="site-header">
-            <div class="header-top">
-                <div class="brand-wrapper">
-                    <div class="brand-icon" aria-hidden="true">🌱</div>
-                    <div class="brand-titles">
-                        <h1>AgriSmoke AI</h1>
-                        <div class="tagline">
-                            <span>Indo-Gangetic Airshed Intelligence</span>
-                            <span class="status-pill demo"><span class="pulse-dot"></span> Active Simulation Mode</span>
-                        </div>
+    <div class="app-shell" id="app-shell">
+        <!-- Left Sidebar Navigation -->
+        <aside class="sidebar" id="sidebar" aria-label="Primary Navigation">
+            <div class="brand">
+                <div class="brand-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg>
+                </div>
+                <div class="brand-txt">
+                    <div class="brand-name">AgriSmoke AI</div>
+                    <div class="brand-sub">Airshed Intelligence</div>
+                </div>
+            </div>
+
+            <div class="side-search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+                <input type="text" placeholder="Search stations, districts…" aria-label="Search">
+            </div>
+
+            <div class="side-label">Menu</div>
+            <nav class="nav-tabs" aria-label="Main Navigation">
+                <button class="nav-tab-btn active" data-tab="dashboard"><span class="nav-ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg></span><span class="nav-txt">Executive Dashboard</span></button>
+                <button class="nav-tab-btn" data-tab="map"><span class="nav-ic"><svg viewBox="0 0 24 24"><path d="M9 3 3 6v15l6-3 6 3 6-3V3l-6 3-6-3z"/><path d="M9 3v15M15 6v15"/></svg></span><span class="nav-txt">Geospatial Plume Map</span></button>
+                <button class="nav-tab-btn" data-tab="calculator"><span class="nav-ic"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg></span><span class="nav-txt">AI Prediction Engine</span></button>
+                <button class="nav-tab-btn" data-tab="grap"><span class="nav-ic"><svg viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v5M12 18h.01"/></svg></span><span class="nav-txt">GRAP Stages &amp; Alerts</span></button>
+                <button class="nav-tab-btn" data-tab="mitigation"><span class="nav-ic"><svg viewBox="0 0 24 24"><path d="M7 20h10M12 20v-8M12 12c0-3-2-5-5-5 0 3 2 5 5 5zM12 12c0-3 2-5 5-5 0 3-2 5-5 5z"/></svg></span><span class="nav-txt">Policy Simulator</span></button>
+                <button class="nav-tab-btn" data-tab="transparency"><span class="nav-ic"><svg viewBox="0 0 24 24"><path d="M2 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2z"/><path d="M22 4h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg></span><span class="nav-txt">Methodology &amp; Standards</span></button>
+            </nav>
+
+        </aside>
+
+        <div class="main-area">
+            <!-- Topbar -->
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="sidebar-toggle" id="sidebar-toggle" type="button" title="Toggle sidebar" aria-label="Toggle sidebar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                    </button>
+                    <div class="topbar-title">
+                        <div class="crumb">AgriSmoke AI <span class="crumb-sep">›</span> <span id="crumb-section">Executive Dashboard</span></div>
+                        <h1 class="page-title">Indo-Gangetic Airshed Intelligence</h1>
                     </div>
                 </div>
-                <div class="header-actions">
-                    <label
-                        style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:var(--text-secondary);cursor:pointer;">
-                        <input type="checkbox" id="toggle-live-sim" checked style="accent-color:var(--accent-primary);cursor:pointer;">
-                        <span>Simulate Micro-Variations</span>
+                <div class="topbar-actions">
+                    <span class="status-pill demo"><span class="pulse-dot"></span> Active Simulation Mode</span>
+                    <label class="live-toggle" title="Toggle simulated micro-variations">
+                        <input type="checkbox" id="toggle-live-sim" checked>
+                        <span>Simulate</span>
                     </label>
-                    <button class="btn btn-sm" id="btn-export-csv" title="Download diagnostic data report in CSV format">
-                        Export CSV
-                    </button>
-                    <button class="btn btn-sm btn-primary" id="btn-print-report" title="Print or save PDF summary briefing">
-                        Print Briefing
-                    </button>
+                    <button class="btn btn-sm" id="btn-export-csv" title="Download diagnostic data report in CSV format">Export CSV</button>
+                    <button class="btn btn-sm btn-primary" id="btn-print-report" title="Print or save PDF summary briefing">Print Briefing</button>
                 </div>
-            </div>
+            </header>
 
-            <!-- Mandatory Demonstration Status & Model Notice Banner -->
-            <div class="demo-banner">
-                <div class="demo-banner-content">
-                    <strong>Notice:</strong>
-                    <span>Live satellite telemetry (NASA VIIRS/MODIS) and CPCB CAAQMS sensor APIs operate in demonstration mode. Predictions are generated via calibrated atmospheric dispersion equations and trained machine learning models.</span>
+            <div class="main-scroll">
+                <!-- Data-source notice banner -->
+                <div class="demo-banner">
+                    <div class="demo-banner-content">
+                        <strong>Live data:</strong>
+                        <span>Satellite fire detections (NASA FIRMS VIIRS), meteorology and air quality (Open-Meteo) are ingested in real time. AQI predictions use a trained GradientBoosting dispersion model.</span>
+                    </div>
                 </div>
-            </div>
-        </header>
 
-        <!-- Active Threshold Trigger Emergency Banner -->
-        <div id="active-alert-banner" class="alert-trigger-banner" role="alert">
-            <div class="alert-icon">⚠️</div>
-            <div class="alert-text" id="banner-alert-msg">
-                CRITICAL THRESHOLD TRIGGERED: Current predicted AQI exceeds your configured emergency threshold.
-            </div>
-            <button class="btn btn-sm" id="btn-test-alert-sound">Test Sound</button>
-        </div>
+                <!-- Active Threshold Trigger Emergency Banner -->
+                <div id="active-alert-banner" class="alert-trigger-banner" role="alert">
+                    <div class="alert-icon">⚠️</div>
+                    <div class="alert-text" id="banner-alert-msg">
+                        CRITICAL THRESHOLD TRIGGERED: Current predicted AQI exceeds your configured emergency threshold.
+                    </div>
+                    <button class="btn btn-sm" id="btn-test-alert-sound">Test Sound</button>
+                </div>
 
-        <!-- Navigation Tabs -->
-        <nav class="nav-tabs" aria-label="Main Navigation">
-            <button class="nav-tab-btn active" data-tab="dashboard">Executive Dashboard</button>
-            <button class="nav-tab-btn" data-tab="map">Geospatial Plume Map</button>
-            <button class="nav-tab-btn" data-tab="calculator">AI Prediction Engine</button>
-            <button class="nav-tab-btn" data-tab="grap">GRAP Stages &amp; Alerts</button>
-            <button class="nav-tab-btn" data-tab="mitigation">Policy Simulator</button>
-            <button class="nav-tab-btn" data-tab="transparency">Methodology &amp; Standards</button>
-        </nav>
-
-        <!-- Real-Time Airshed Telemetry Strip -->
-        <div class="live-telemetry-bar">
+                <!-- Real-Time Airshed Telemetry Strip -->
+                <div class="live-telemetry-bar">
             <div class="live-telemetry-indicator">
                 <span class="live-pulse-beacon"></span>
                 <span class="live-status-text">LIVE TELEMETRY STREAM</span>
@@ -1149,7 +1163,9 @@
                 <span>System Generated Telemetry &bull; Verification Hash: <code id="print-auth-hash">AGRI-7F3A-NCR</code></span>
             </div>
         </footer>
-    </div>
+            </div><!-- /.main-scroll -->
+        </div><!-- /.main-area -->
+    </div><!-- /.app-shell -->
 
     <!-- Interactive Item Modal Dialog -->
     <div id="detail-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -1174,6 +1190,29 @@
     <script src="js/map-engine.js"></script>
     <script src="js/charts-engine.js"></script>
     <script src="js/app.js"></script>
+    <script>
+        // Sidebar collapse toggle + breadcrumb label sync (layout chrome only)
+        (function () {
+            var shell = document.getElementById('app-shell');
+            var toggleBtn = document.getElementById('sidebar-toggle');
+            if (shell && toggleBtn) {
+                toggleBtn.addEventListener('click', function () {
+                    shell.classList.toggle('collapsed');
+                    // Let the map recompute its canvas size after the width transition
+                    setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 240);
+                });
+            }
+            var crumb = document.getElementById('crumb-section');
+            document.querySelectorAll('.nav-tab-btn').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    if (crumb) {
+                        var t = btn.querySelector('.nav-txt');
+                        crumb.textContent = t ? t.textContent : btn.textContent;
+                    }
+                });
+            });
+        })();
+    </script>
     <script>
         if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
             window.addEventListener('load', () => {

@@ -237,7 +237,7 @@ All secrets and tunable parameters use **environment variables** with sensible d
 | 3 | `hourly_forecasts` | Diurnal cycle projections | `hour_num`, `aqi`, `pm25`, `pbl_height` |
 | 4 | `weekly_trends` | 7-day historical trends | `day_label`, `aqi`, `fires`, `stubble_pct`, `grap_stage` |
 | 5 | `district_fire_counts` | District fire rankings | `district`, `fires`, `state` |
-| 6 | `grap_stages` | GRAP action plan (I–IV) | `stage`, `aqi_range`, `is_active`, `actions_json` |
+| 6 | `grap_stages` | GRAP action plan (I–IV) | `stage`, `aqi_range`, `is_active`, ```actions_json` |
 | 7 | `early_warning_alerts` | Alert feed entries | `level`, `alert_type`, `title`, `detail`, `action_required` |
 | 8 | `simulation_history` | User/engine scenario runs | `fire_count`, `predicted_aqi`, `predicted_pm25`, `parali_pct` |
 | 9 | `custom_thresholds` | Safety threshold settings | `aqi_threshold`, `fires_threshold` |

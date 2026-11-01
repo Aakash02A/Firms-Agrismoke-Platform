@@ -28,9 +28,19 @@ if str(AI_ML_DIR) not in sys.path:
 if str(ROOT_DIR / "backend") not in sys.path:
     sys.path.insert(0, str(ROOT_DIR / "backend"))
 
+# Load project-root .env so os.getenv() calls (NASA_FIRMS_MAP_KEY, PORT, REDIS_URL,
+# etc.) pick up values from the file. Graceful: if python-dotenv is not installed,
+# we simply rely on variables exported in the OS environment.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT_DIR / ".env")
+except ImportError:
+    pass
+
 from model_inference import predictor
 import database as db
 from backend.integrations.weather import weather_service, LiveWeatherSnapshot
+from backend.integrations.air_quality import air_quality_service
 from backend.scheduler import scheduler
 from backend.policy_simulator import (
     PolicySimulationRequest,
@@ -76,15 +86,22 @@ class ThresholdUpdateRequest(BaseModel):
 
 @app.get("/api/status")
 def get_system_status():
-    """Returns current system health, metadata, and default status benchmark."""
+    """Returns current system health, metadata, and a LIVE-driven status benchmark."""
+    # Pull real-time meteorology (Open-Meteo, key-free) and live Delhi baseline AQI
+    # so the benchmark reflects actual conditions rather than fixed mock defaults.
+    live_wx = weather_service.get_live_weather("delhi_ncr")
+    live_aq = air_quality_service.get_live_reading(28.6139, 77.2090)
+
     default_params = {
         "fireCount": 1684,
-        "windSpeed": 11.5,
-        "windDirectionDeg": 305,
-        "pblHeight": 480,
-        "urbanBaselineAqi": 180,
+        "windSpeed": live_wx.windSpeed,
+        "windDirectionDeg": live_wx.windDirectionDeg,
+        "pblHeight": live_wx.pblHeight,
+        "urbanBaselineAqi": (live_aq["aqi"] if live_aq else 180),
         "bioDecomposerAdoption": 25,
-        "happySeederAdoption": 30
+        "happySeederAdoption": 30,
+        "temperature": live_wx.temperature,
+        "humidity": live_wx.humidity
     }
     pred = predictor.predict(default_params)
     thresholds = db.get_custom_thresholds()
@@ -107,6 +124,8 @@ def get_system_status():
             "windSpeed": default_params["windSpeed"],
             "windDirectionDeg": default_params["windDirectionDeg"],
             "pblHeight": default_params["pblHeight"],
+            "isWeatherLive": live_wx.isLive,
+            "isAirQualityLive": bool(live_aq),
             "airshedRiskScore": pred["airshedScore"],
             "grapStage": pred["grapStage"]
         },
@@ -115,12 +134,21 @@ def get_system_status():
 
 @app.get("/api/stations")
 def get_stations():
-    """Retrieve all real-world monitoring stations from SQLite database."""
-    return db.get_monitoring_stations()
+    """Retrieve monitoring stations enriched with LIVE PM2.5/PM10/AQI from the
+    Open-Meteo Air Quality API (key-free). Falls back to stored values when the
+    live feed is unreachable, marking each record with a `live` flag."""
+    stations = db.get_monitoring_stations()
+    air_quality_service.enrich_stations(stations)
+    return stations
 
 @app.get("/api/hotspots")
 def get_hotspots():
-    """Retrieve active fire thermal anomalies in Punjab & Haryana from SQLite."""
+    """Return active fire hotspots. Prefers LIVE NASA FIRMS satellite detections
+    aggregated by district; falls back to seeded reference hotspots when no live
+    observations have been synced yet (e.g. MAP key not configured)."""
+    live = db.get_live_fire_hotspots()
+    if live:
+        return live
     return db.get_fire_hotspots()
 
 @app.get("/api/trends/weekly")
@@ -130,7 +158,11 @@ def get_weekly_trends():
 
 @app.get("/api/districts")
 def get_district_rankings():
-    """Retrieve district-wise stubble burning comparison."""
+    """District-wise stubble burning counts. Uses LIVE NASA FIRMS aggregates when
+    available, otherwise the seeded district counts."""
+    live = db.get_live_district_fire_counts()
+    if live:
+        return live
     return db.get_district_fire_counts()
 
 @app.get("/api/grap")
