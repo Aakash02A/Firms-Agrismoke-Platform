@@ -638,11 +638,15 @@ class AgriSmokeMapEngine {
     drawWindField() {
         const ctx = this.ctx;
         ctx.save();
-        ctx.strokeStyle = 'rgba(100, 216, 255, 0.18)';
-        ctx.fillStyle = 'rgba(100, 216, 255, 0.3)';
-        ctx.lineWidth = 1.2;
+        // High-contrast cyan with a soft glow so the vectors read clearly on the dark basemap.
+        ctx.strokeStyle = 'rgba(129, 154, 161, 0.75)';
+        ctx.fillStyle = 'rgba(157, 188, 195, 0.95)';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.shadowColor = 'rgba(197, 197, 197, 0.9)';
+        ctx.shadowBlur = 6;
 
-        const arrowLen = Math.min(32, 12 + this.windSpeed * 0.9);
+        const arrowLen = Math.min(46, 20 + this.windSpeed * 1.3);
         const cos = Math.cos(this.windAngleRad);
         const sin = Math.sin(this.windAngleRad);
 
@@ -659,7 +663,7 @@ class AgriSmokeMapEngine {
                 ctx.stroke();
 
                 // Arrow head
-                const headLen = 4;
+                const headLen = 8;
                 ctx.beginPath();
                 ctx.moveTo(endX, endY);
                 ctx.lineTo(
@@ -670,6 +674,7 @@ class AgriSmokeMapEngine {
                     endX - headLen * Math.cos(this.windAngleRad + Math.PI / 6),
                     endY - headLen * Math.sin(this.windAngleRad + Math.PI / 6)
                 );
+                ctx.closePath();
                 ctx.fill();
             }
         }
