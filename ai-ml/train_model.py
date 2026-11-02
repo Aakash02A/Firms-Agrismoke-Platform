@@ -8,7 +8,6 @@ import sys
 import json
 import time
 from pathlib import Path
-import numpy as np
 import pandas as pd
 import joblib
 
@@ -24,7 +23,7 @@ if "_loss" not in sys.modules:
         except Exception:
             pass
 
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import r2_score, root_mean_squared_error, mean_absolute_error

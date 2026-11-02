@@ -7,7 +7,7 @@ forest fires, industrial sources, or unclassified heat anomalies.
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Tuple, Optional
 
 logger = logging.getLogger("agri_smoke.firms.classifier")
 

@@ -5,11 +5,10 @@ deduplication, event clustering, and status telemetry.
 """
 
 import time
-import math
 import logging
 import traceback
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 from .config import FirmsConfig
 from .client import NasaFirmsClient
@@ -17,7 +16,7 @@ from .parser import parse_firms_csv
 from .normalizer import normalize_observation
 from .classifier import classify_fire_observation, haversine_km
 from .schemas import SyncSummary, ProviderStatusResponse
-from .exceptions import FirmsError, FirmsAuthenticationError
+from .exceptions import FirmsAuthenticationError
 
 from backend import database
 

@@ -4,10 +4,9 @@ Monitors real-time predicted AQI, satellite fire hotspots, and meteorological th
 Triggers CAQM GRAP Stage notifications and dispatches alerts via configured channels.
 """
 
-import time
 import uuid
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from datetime import datetime, timezone
 import database as db
 
@@ -37,7 +36,6 @@ class AlertEvaluationEngine:
         Generates and saves alerts into SQLite, then triggers multi-channel dispatch.
         """
         generated_alerts = []
-        now_iso = datetime.now(timezone.utc).isoformat()
 
         # Rule 1: GRAP Stage IV Emergency (AQI > 450)
         if predicted_aqi >= 450:

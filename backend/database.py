@@ -228,7 +228,7 @@ def insert_fire_observations(observations: List[Dict[str, Any]]) -> Dict[str, in
                 }
                 cursor.execute(sql, record)
                 inserted += cursor.rowcount
-            except Exception as e:
+            except Exception:
                 errors += 1
         conn.commit()
 
@@ -618,7 +618,7 @@ def save_fire_events(events: List[Dict[str, Any]]) -> int:
                 }
                 cursor.execute(sql, record)
                 saved += cursor.rowcount
-            except Exception as e:
+            except Exception:
                 pass
         conn.commit()
     return saved

@@ -10,7 +10,7 @@ from the environment (Render dashboard / .env, which is git-ignored).
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 

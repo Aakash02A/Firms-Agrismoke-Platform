@@ -8,7 +8,7 @@ Includes in-memory TTL caching and calibrated seasonal fallback.
 import time
 import math
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime, timezone
 import requests
 from pydantic import BaseModel, Field

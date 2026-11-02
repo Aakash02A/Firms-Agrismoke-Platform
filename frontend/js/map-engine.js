@@ -157,26 +157,6 @@ class AgriSmokeMapEngine {
         return { x: screenX, y: screenY };
     }
 
-    screenToGeo(screenX, screenY) {
-        const centerX = this.width / 2;
-        const centerY = this.height / 2;
-
-        const rawX = (screenX - centerX) / this.scale + centerX - this.panX;
-        const rawY = (screenY - centerY) / this.scale + centerY - this.panY;
-
-        const baseMargin = 40;
-        const availWidth = this.width - baseMargin * 2;
-        const availHeight = this.height - baseMargin * 2;
-
-        const normX = (rawX - baseMargin) / availWidth;
-        const normY = (rawY - baseMargin) / availHeight;
-
-        const lng = this.geoBounds.minLng + normX * (this.geoBounds.maxLng - this.geoBounds.minLng);
-        const lat = this.geoBounds.maxLat - normY * (this.geoBounds.maxLat - this.geoBounds.minLat);
-
-        return { lat, lng };
-    }
-
     initParticles() {
         this.particles = [];
         for (let i = 0; i < this.maxParticles; i++) {

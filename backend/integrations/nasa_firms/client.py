@@ -7,7 +7,7 @@ Implements retry logic, status validation, rate limit handling, and timeout safe
 import time
 import logging
 import requests
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Tuple
 from .config import FirmsConfig
 from .exceptions import (
     FirmsAuthenticationError,
@@ -103,7 +103,7 @@ class NasaFirmsClient:
                         [self.config.map_key],
                     ))
 
-            except requests.exceptions.Timeout as te:
+            except requests.exceptions.Timeout:
                 if attempt < max_retries:
                     time.sleep(backoff_seconds)
                     continue

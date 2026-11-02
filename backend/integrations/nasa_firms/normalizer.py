@@ -6,7 +6,6 @@ Standardizes VIIRS/MODIS observations into normalized database records with SHA-
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Tuple
 
 logger = logging.getLogger("agri_smoke.firms.normalizer")
