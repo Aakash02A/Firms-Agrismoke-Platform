@@ -17,6 +17,11 @@ from .exceptions import (
     FirmsError
 )
 
+try:
+    from backend.security import redact_secrets
+except ImportError:  # pragma: no cover - supports flat/direct imports
+    from security import redact_secrets
+
 logger = logging.getLogger("agri_smoke.firms.client")
 
 USER_AGENT = "AgriSmoke-AI/2.0 (Geospatial Environmental Air Quality Platform)"
@@ -93,18 +98,27 @@ class NasaFirmsClient:
                         continue
                     raise FirmsNetworkError(f"NASA FIRMS server error (HTTP {response.status_code})")
                 else:
-                    raise FirmsError(f"NASA FIRMS API returned unexpected HTTP {response.status_code}: {response.text[:200]}")
+                    raise FirmsError(redact_secrets(
+                        f"NASA FIRMS API returned unexpected HTTP {response.status_code}: {response.text[:200]}",
+                        [self.config.map_key],
+                    ))
 
             except requests.exceptions.Timeout as te:
                 if attempt < max_retries:
                     time.sleep(backoff_seconds)
                     continue
-                raise FirmsNetworkError(f"Connection to NASA FIRMS timed out after {self.config.timeout}s: {te}")
+                # Never embed the exception repr/URL (contains the MAP_KEY). `from None`
+                # also suppresses the __context__ chain so tracebacks stay clean.
+                raise FirmsNetworkError(
+                    f"Connection to NASA FIRMS timed out after {self.config.timeout}s"
+                ) from None
             except requests.exceptions.RequestException as re:
                 if attempt < max_retries:
                     time.sleep(backoff_seconds)
                     continue
-                raise FirmsNetworkError(f"Network error communicating with NASA FIRMS: {re}")
+                raise FirmsNetworkError(
+                    f"Network error communicating with NASA FIRMS ({type(re).__name__})"
+                ) from None
 
         raise FirmsNetworkError("Exceeded maximum retries contacting NASA FIRMS")
 
@@ -122,4 +136,6 @@ class NasaFirmsClient:
                 return resp.text
             raise FirmsError(f"Failed to check data availability (HTTP {resp.status_code})")
         except Exception as e:
-            raise FirmsNetworkError(f"Error checking data availability: {e}")
+            raise FirmsNetworkError(
+                f"Error checking data availability ({type(e).__name__})"
+            ) from None

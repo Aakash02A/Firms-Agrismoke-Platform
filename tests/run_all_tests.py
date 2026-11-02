@@ -26,7 +26,8 @@ TEST_SCRIPTS = [
     ("SQLite Database Layer", "test_database.py"),
     ("NASA FIRMS Ingestion & Intelligence Layer", "test_nasa_firms.py"),
     ("Machine Learning & Physical Dispersion", "test_ml_model.py"),
-    ("FastAPI Backend & API Endpoints", "test_backend_api.py")
+    ("FastAPI Backend & API Endpoints", "test_backend_api.py"),
+    ("Secret Leakage & Redaction Hardening", "test_security_scrubbing.py")
 ]
 
 def run_all():

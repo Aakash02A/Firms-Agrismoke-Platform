@@ -7,6 +7,7 @@ deduplication, event clustering, and status telemetry.
 import time
 import math
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -19,6 +20,11 @@ from .schemas import SyncSummary, ProviderStatusResponse
 from .exceptions import FirmsError, FirmsAuthenticationError
 
 from backend import database
+
+try:
+    from backend.security import redact_secrets
+except ImportError:  # pragma: no cover - supports flat/direct imports
+    from security import redact_secrets
 
 logger = logging.getLogger("agri_smoke.firms.service")
 
@@ -270,8 +276,14 @@ class FirmsIngestionService:
 
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
-            err_msg = str(e)
-            logger.error(f"Ingestion failed: {err_msg}", exc_info=True)
+            # Redact the MAP_KEY / any credential-bearing URL from BOTH the message
+            # we persist and the traceback we log. The underlying requests exception
+            # can echo the full FIRMS URL (which contains the key in its path).
+            err_msg = redact_secrets(str(e), [self.config.map_key])
+            logger.error(
+                "NASA FIRMS ingestion failed:\n%s",
+                redact_secrets(traceback.format_exc(), [self.config.map_key]),
+            )
 
             job_id = database.record_sync_job(
                 provider_id="nasa_firms",
@@ -322,6 +334,6 @@ class FirmsIngestionService:
             latest_data_timestamp=raw_status.get("latest_data_timestamp"),
             total_records_ingested=raw_status.get("total_records_ingested", 0),
             consecutive_failures=raw_status.get("consecutive_failures", 0),
-            last_error_message=raw_status.get("last_error_message"),
+            last_error_message=redact_secrets(raw_status.get("last_error_message"), [self.config.map_key]),
             details=raw_status.get("details")
         )

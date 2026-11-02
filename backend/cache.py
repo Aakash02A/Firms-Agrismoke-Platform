@@ -10,6 +10,11 @@ import json
 import logging
 from typing import Any, Optional, Dict
 
+try:
+    from backend.security import mask_url, redact_secrets
+except ImportError:  # pragma: no cover - supports flat/direct imports
+    from security import mask_url, redact_secrets
+
 logger = logging.getLogger("agri_smoke.cache")
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -29,9 +34,12 @@ class CacheInterface:
                 self._redis_client = redis.from_url(REDIS_URL, decode_responses=True)
                 self._redis_client.ping()
                 self._is_redis_available = True
-                logger.info(f"Connected to enterprise Redis cache at {REDIS_URL}")
+                logger.info("Connected to enterprise Redis cache at %s", mask_url(REDIS_URL))
             except Exception as e:
-                logger.warning(f"Redis connection failed ({e}). Falling back to in-memory TTL cache.")
+                logger.warning(
+                    "Redis connection failed (%s). Falling back to in-memory TTL cache.",
+                    redact_secrets(str(e), [REDIS_URL]),
+                )
 
     @property
     def is_redis(self) -> bool:
@@ -44,7 +52,10 @@ class CacheInterface:
                 val = self._redis_client.get(key)
                 return json.loads(val) if val else None
             except Exception as e:
-                logger.warning(f"Redis GET failed for {key} ({e}); falling back to memory.")
+                logger.warning(
+                    "Redis GET failed for %s (%s); falling back to memory.",
+                    key, redact_secrets(str(e), [REDIS_URL]),
+                )
 
         # In-memory retrieval
         now = time.time()
@@ -62,7 +73,10 @@ class CacheInterface:
                 self._redis_client.setex(key, ttl, json.dumps(value))
                 return True
             except Exception as e:
-                logger.warning(f"Redis SET failed for {key} ({e}); falling back to memory.")
+                logger.warning(
+                    "Redis SET failed for %s (%s); falling back to memory.",
+                    key, redact_secrets(str(e), [REDIS_URL]),
+                )
 
         # In-memory storage
         self._memory_store[key] = value
