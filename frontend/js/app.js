@@ -1541,13 +1541,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 14. Check Backend API Connectivity & Hydrate Live Data
-    async function checkBackendConnectivity() {
+    async function checkBackendConnectivity(allowRetry = true) {
         const statusPill = document.querySelector('.status-pill');
         const demoBannerContent = document.querySelector('.demo-banner-content');
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2500);
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
 
             const res = await fetch(`${API_BASE}/api/status`, { signal: controller.signal });
             clearTimeout(timeoutId);
@@ -1578,6 +1578,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 showNotification("Connected to Python FastAPI & SQLite Backend with trained ML model!", "success");
             }
         } catch (e) {
+            // A cold backend start (e.g. /api/status warming its Open-Meteo cache) can
+            // transiently exceed the timeout; retry once before declaring offline mode.
+            if (allowRetry) {
+                setTimeout(() => checkBackendConnectivity(false), 2000);
+                return;
+            }
             isBackendConnected = false;
             console.log("[Notice] Python backend not detected at " + API_BASE + ". Operating in Standalone Offline Simulation Mode.");
             if (statusPill) {
