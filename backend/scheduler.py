@@ -235,7 +235,10 @@ class MaintenanceScheduler:
             else _get_int("RETENTION_INTERVAL_SECONDS", 86400)      # 24h
         )
         self.retention_apply = (
-            _get_bool("RETENTION_APPLY", True) if retention_apply is None else retention_apply
+            # Dry-run is the safe default: a fresh deploy must NEVER silently
+            # delete historical rows. Actual deletion requires an explicit
+            # RETENTION_APPLY=true opt-in by the operator.
+            _get_bool("RETENTION_APPLY", False) if retention_apply is None else retention_apply
         )
         self.backup_before_retain = (
             _get_bool("BACKUP_BEFORE_RETAIN", True) if backup_before_retention is None else backup_before_retention
@@ -273,7 +276,12 @@ class MaintenanceScheduler:
 
     def _run_loop(self):
         last_backup_time = 0.0
-        last_retention_time = 0.0
+        # Retention is DEFERRED until a full interval has elapsed since boot, so
+        # a redeploy can never immediately prune data (even when an operator has
+        # explicitly opted in to apply mode). Backup is still allowed to fire at
+        # boot via the first_backup_done flag below, because a fresh snapshot on
+        # startup is a safety feature, not a destructive one.
+        last_retention_time = time.time()
         first_backup_done = False
 
         while self._running:
@@ -334,6 +342,13 @@ class MaintenanceScheduler:
             report = db.run_retention_cycle(apply_changes=apply_changes,
                                             backup_first=self.backup_before_retain)
             self.last_retention = _utcnow().isoformat()
+            if report.get("aborted"):
+                # A destructive prune was blocked (the pre-retention backup did
+                # not fully succeed). Record it, but do NOT count it as a
+                # completed retention cycle - nothing was deleted.
+                self.last_error = f"Retention aborted: {report.get('reason', 'pre-retention backup failed')}"
+                logger.warning(self.last_error)
+                return report
             self.total_retention_runs += 1
             self.last_retention_summary = {
                 t: r.get("rows_deleted", 0) for t, r in report.get("tables", {}).items()
@@ -353,6 +368,9 @@ class MaintenanceScheduler:
             "backupIntervalHours": round(self.backup_interval / 3600.0, 1),
             "retentionIntervalHours": round(self.retention_interval / 3600.0, 1),
             "retentionApply": self.retention_apply,
+            # Unambiguous human-readable mode: an operator (or an auditor) must
+            # be able to tell at a glance that production is NOT deleting data.
+            "retentionMode": "apply" if self.retention_apply else "dry-run",
             "backupBeforeRetention": self.backup_before_retain,
             "lastBackup": self.last_backup,
             "nextBackup": self.next_backup,

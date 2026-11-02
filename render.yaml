@@ -51,9 +51,9 @@ services:
       - key: BACKUP_RETENTION_KEEP
         value: "10"                     # keep newest 10 local snapshots
       - key: RETENTION_INTERVAL_SECONDS
-        value: "86400"                  # prune aged rows daily
+        value: "86400"                  # prune aged rows daily (first run is deferred one full interval after boot)
       - key: RETENTION_APPLY
-        value: "true"                   # false = dry-run (counts only)
+        value: "false"                  # SAFE DEFAULT: dry-run (counts only). Set true only as an explicit opt-in to delete aged rows
       - key: BACKUP_BEFORE_RETAIN
         value: "true"                   # always snapshot before a destructive prune
       - key: SQLITE_MIN_FREE_MB

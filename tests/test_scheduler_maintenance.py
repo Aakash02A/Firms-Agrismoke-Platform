@@ -658,20 +658,30 @@ class TestMaintenanceScheduling(Phase4TestCase):
         # An explicit argument always wins over the environment.
         self.assertEqual(60, MaintenanceScheduler(backup_interval_seconds=60).backup_interval)
 
-    def test_first_backup_fires_on_boot_then_once(self):
-        sched = MaintenanceScheduler(backup_interval_seconds=3600, retention_interval_seconds=3600)
+    def test_backup_fires_at_boot_but_retention_is_deferred(self):
+        """VERIFIED boot behaviour (Phase 4.1).
+
+        The loops measure elapsed time against absolute time.time(), so with
+        last_* initialised to 0 every job branch would fire on the first tick.
+        Backup deliberately keeps that (first_backup_done=False -> a fresh
+        snapshot right after a restart is a safety feature). Retention is the
+        destructive branch, so its clock starts AT boot
+        (last_retention_time = time.time()), which defers the first prune by a
+        full interval and means a deploy NEVER prunes immediately.
+        """
+        sched = MaintenanceScheduler(backup_interval_seconds=3600, retention_interval_seconds=3600,
+                                     retention_apply=True)   # even opted-in to apply...
         with mock.patch.object(db, "run_backup_cycle", return_value={"ok": True}) as cycle, \
              mock.patch.object(db, "run_retention_cycle", return_value={"tables": {}}) as retain, \
              mock.patch("backend.scheduler.time.sleep",
                         side_effect=lambda *_a: setattr(sched, "_running", False)):
             sched._running = True
-            sched._run_loop()
-        self.assertEqual(1, cycle.call_count)
-        self.assertTrue(retain.call_count >= 1)
+            sched._run_loop()               # one real-clock boot tick
+        self.assertEqual(1, cycle.call_count)          # backup ran at boot
+        retain.assert_not_called()                     # retention did NOT run at boot
         self.assertEqual(1, sched.total_backups)
-        self.assertIsNotNone(sched.last_backup)
+        self.assertEqual(0, sched.total_retention_runs)
         self.assertIsNotNone(sched.next_backup)
-        self.assertTrue(sched.last_backup_ok)
 
     def test_thread_drives_the_backup_cycle(self):
         self.boot_db()
@@ -689,21 +699,45 @@ class TestMaintenanceScheduling(Phase4TestCase):
         self.assertTrue(sched.last_backup_ok)
         self.assertEqual(1, len(self.snapshot_files()))
 
-    def test_retention_is_deferred_until_its_interval_elapses(self):
-        """The loop measures against absolute time.time(); with an early clock
-        the backup still runs at boot (explicit first_backup_done flag) while
-        retention correctly waits for its interval rather than firing at t=0."""
-        sched = MaintenanceScheduler(backup_interval_seconds=3600, retention_interval_seconds=3600,
+    def test_retention_runs_once_its_interval_has_elapsed(self):
+        """With the clock advanced past the retention interval, the loop fires
+        exactly one retention pass and then reschedules - proving the boot
+        deferral is a real wait, not retention being disabled."""
+        # backup_interval is huge so only the boot backup (first_backup_done)
+        # runs; retention is what we are watching.
+        sched = MaintenanceScheduler(backup_interval_seconds=10 ** 9, retention_interval_seconds=3600,
                                      retention_apply=False)
-        with mock.patch.object(db, "run_backup_cycle", return_value={"ok": True}), \
-             mock.patch.object(db, "run_retention_cycle") as retain, \
-             mock.patch("backend.scheduler.time.time", return_value=100.0), \
-             mock.patch("backend.scheduler.time.sleep",
-                        side_effect=lambda *_a: setattr(sched, "_running", False)):
+        boot = 1_000_000.0
+        time_calls = {"n": 0}
+
+        def fake_time():
+            time_calls["n"] += 1
+            # call 1 = _run_loop entry (seeds last_retention_time), call 2 = tick
+            # 1 (retention must be deferred), call 3+ = tick 2 (interval elapsed).
+            return boot if time_calls["n"] <= 2 else boot + 3601
+
+        def run_retention(*_a, **_k):
+            sched._running = False           # stop once the deferred pass fires
+            return {"tables": {}}
+
+        sleeps = {"n": 0}
+
+        def fake_sleep(*_a, **_k):
+            sleeps["n"] += 1
+            if sleeps["n"] > 25:             # safety: never hang if logic changes
+                sched._running = False
+
+        with mock.patch.object(db, "run_backup_cycle", return_value={"ok": True}) as cycle, \
+             mock.patch.object(db, "run_retention_cycle", side_effect=run_retention) as retain, \
+             mock.patch("backend.scheduler.time.time", side_effect=fake_time), \
+             mock.patch("backend.scheduler.time.sleep", side_effect=fake_sleep):
             sched._running = True
             sched._run_loop()
-        retain.assert_not_called()          # 100 - 0 = 100 < 3600
-        self.assertEqual(1, sched.total_backups)  # boot snapshot still taken
+        self.assertEqual(1, cycle.call_count)                    # boot backup only
+        self.assertEqual(1, retain.call_count)                   # deferred retention fired once
+        self.assertFalse(retain.call_args.kwargs["apply_changes"])  # dry-run preserved
+        self.assertEqual(1, sched.total_retention_runs)
+
 
 
 class TestIngestionScheduling(Phase4TestCase):
@@ -966,6 +1000,218 @@ class TestGracefulShutdown(Phase4TestCase):
         self.assertEqual(1, len(finished))
         self.assertTrue(Path(finished[0]).exists())
         self.assertTrue(self.db_path.exists())
+
+
+# =============================================================================
+# Phase 4.1 - Production Safety Verification
+# =============================================================================
+
+class TestRetentionSafeByDefault(Phase4TestCase):
+    """Section 2: retention must be dry-run unless explicitly opted in, and a
+    pre-retention backup must fully succeed before anything is deleted."""
+
+    def seed_aged_observation(self, obs_id="aged-obs", stale_days=400):
+        when = (datetime.now(timezone.utc).date() - timedelta(days=stale_days)).isoformat()
+        with db.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO fire_observations (id, source_dataset, satellite, instrument, latitude,"
+                " longitude, acq_date, acq_time, acquisition_timestamp, confidence, confidence_score,"
+                " frp, daynight, classification) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (obs_id, "VIIRS_NOAA20_NRT", "NOAA-20", "VIIRS", 30.9, 75.8, when, "0100",
+                 f"{when}T01:00:00Z", "nominal", 0.5, 1.2, "D", "agricultural"),
+            )
+            conn.commit()
+
+    def obs_count(self):
+        with db.get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM fire_observations").fetchone()[0]
+
+    def test_scheduler_retention_defaults_to_dry_run(self):
+        # setUp clears RETENTION_APPLY, so this is the true shipped default.
+        sched = MaintenanceScheduler()
+        self.assertFalse(sched.retention_apply, "retention must default to dry-run")
+        with mock.patch.object(db, "run_retention_cycle", return_value={"tables": {}}) as cycle:
+            sched.run_retention_now()
+        self.assertFalse(cycle.call_args.kwargs["apply_changes"], "dry-run default was overridden")
+
+    def test_deletion_requires_explicit_opt_in(self):
+        with mock.patch.dict(os.environ, {"RETENTION_APPLY": "true"}):
+            self.assertTrue(MaintenanceScheduler().retention_apply)
+        with mock.patch.dict(os.environ, {"RETENTION_APPLY": "false"}):
+            self.assertFalse(MaintenanceScheduler().retention_apply)
+
+    def test_status_endpoint_exposes_retention_mode(self):
+        dry = MaintenanceScheduler(retention_apply=False).get_status()
+        self.assertEqual("dry-run", dry["retentionMode"])
+        self.assertFalse(dry["retentionApply"])
+        apply = MaintenanceScheduler(retention_apply=True).get_status()
+        self.assertEqual("apply", apply["retentionMode"])
+        self.assertTrue(apply["retentionApply"])
+
+    def test_failed_pre_retention_backup_prevents_deletion(self):
+        self.boot_db()
+        self.seed_aged_observation()
+        before = self.obs_count()
+        with mock.patch.object(db, "run_backup_cycle", side_effect=RuntimeError("disk full")):
+            report = db.run_retention_cycle(apply_changes=True, backup_first=True,
+                                           tables=["fire_observations"])
+        self.assertTrue(report.get("aborted"))
+        self.assertFalse(report["applied"])
+        self.assertEqual("pre_retention_backup_error", report["reason"])
+        self.assertEqual(before, self.obs_count(), "rows deleted despite a failed backup")
+
+    def test_incomplete_pre_retention_backup_prevents_deletion(self):
+        """A snapshot that 'completes' but reports ok=False (e.g. off-site
+        configured and delivery failed) is still unsafe - abort the prune."""
+        self.boot_db()
+        self.seed_aged_observation()
+        before = self.obs_count()
+        incomplete = {"ok": False, "backup": {"backup_path": "/nonexistent/x.db"}}
+        with mock.patch.object(db, "run_backup_cycle", return_value=incomplete):
+            report = db.run_retention_cycle(apply_changes=True, backup_first=True,
+                                           tables=["fire_observations"])
+        self.assertTrue(report.get("aborted"))
+        self.assertEqual("pre_retention_backup_incomplete", report["reason"])
+        self.assertEqual(before, self.obs_count(), "rows deleted despite an incomplete backup")
+
+    def test_successful_pre_retention_backup_allows_deletion(self):
+        self.boot_db()
+        self.seed_aged_observation()
+        with patch_module_clock(db):
+            report = db.run_retention_cycle(apply_changes=True, backup_first=True,
+                                            tables=["fire_observations"])
+        self.assertFalse(report.get("aborted"), report)
+        self.assertTrue(report["applied"])
+        self.assertIsNotNone(report["pre_retention_backup"])
+        with db.get_connection() as conn:
+            remaining = conn.execute(
+                "SELECT COUNT(*) FROM fire_observations WHERE id = ?", ("aged-obs",)).fetchone()[0]
+        self.assertEqual(0, remaining, "aged row survived a successful pre-retain backup")
+
+    def test_scheduler_records_aborted_retention_and_skips_count(self):
+        sched = MaintenanceScheduler(retention_apply=True)
+        aborted = {"aborted": True, "reason": "pre_retention_backup_error", "tables": {}, "applied": False}
+        with mock.patch.object(db, "run_retention_cycle", return_value=aborted):
+            report = sched.run_retention_now()
+        self.assertTrue(report["aborted"])
+        self.assertEqual(0, sched.total_retention_runs, "aborted prune counted as a completed run")
+        self.assertIn("Retention aborted", sched.last_error)
+
+
+class TestOffsiteFailureHonesty(Phase4TestCase):
+    """Section 4: a failed off-site upload must never be reported as success,
+    the local snapshot must survive it, and no credential may leak."""
+
+    def test_s3_upload_exception_is_reported_not_raised(self):
+        self.boot_db()
+        os.environ["OFFSITE_BACKEND"] = "s3"
+        os.environ["OFFSITE_S3_BUCKET"] = "unit-test-bucket"
+        fake_boto3 = mock.MagicMock()
+        # A realistic botocore error whose *message* contains a sensitive token.
+        fake_boto3.client.return_value.upload_file.side_effect = RuntimeError(
+            "AccessDenied: key " + FAKE_KEY + " rejected")
+        with mock.patch.dict(sys.modules, {"boto3": fake_boto3}), patch_module_clock(db):
+            report = db.run_backup_cycle(label="s3fail")
+        self.assertFalse(report["offsite"]["delivered"])
+        self.assertIn("S3 upload failed", report["offsite"]["reason"])
+        self.assertNotIn(FAKE_KEY, str(report["offsite"]), "credential echoed in reason")
+        self.assertFalse(report["ok"], "off-site failure must mark the cycle not-ok")
+        self.assertEqual(1, len(self.snapshot_files()), "local snapshot lost after off-site failure")
+
+    def test_local_snapshot_survives_when_boto3_absent(self):
+        self.boot_db()
+        os.environ["OFFSITE_BACKEND"] = "s3"
+        os.environ["OFFSITE_S3_BUCKET"] = "unit-test-bucket"
+        real_import = __import__
+
+        def _no_boto3(name, *args, **kwargs):
+            if name == "boto3":
+                raise ImportError("simulated absence")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=_no_boto3), patch_module_clock(db):
+            report = db.run_backup_cycle(label="noboto")
+        self.assertFalse(report["offsite"]["delivered"])
+        self.assertFalse(report["ok"])
+        self.assertEqual(1, len(self.snapshot_files()), "local snapshot lost when boto3 missing")
+
+    def test_none_backend_is_clearly_reported_local_only(self):
+        self.boot_db()
+        os.environ["OFFSITE_BACKEND"] = "none"
+        with patch_module_clock(db):
+            report = db.run_backup_cycle(label="localonly")
+        self.assertTrue(report["ok"])
+        self.assertFalse(report["offsite"]["delivered"])
+        self.assertEqual("off-site disabled", report["offsite"]["reason"])
+        self.assertFalse(db.offsite_configured())
+
+
+class TestConcurrentRetentionAndIngestion(Phase4TestCase):
+    """Section 3: WAL lets readers run beside a writer, but two writers still
+    SERIALIZE - these tests prove lock contention is absorbed by busy_timeout,
+    not by claiming WAL removes writer contention."""
+
+    def test_busy_timeout_is_configured(self):
+        self.boot_db()
+        with db.get_connection() as conn:
+            timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        self.assertGreaterEqual(timeout, 1, "no busy_timeout means a lock would raise instantly")
+
+    def test_concurrent_ingestion_write_and_retention_prune(self):
+        self.boot_db()
+        errors = []
+        stop = threading.Event()
+
+        def ingest_writer():
+            while not stop.is_set():
+                try:
+                    with db.get_connection() as conn:
+                        conn.execute(
+                            "INSERT INTO simulation_history (created_at, fire_count, wind_speed, wind_dir,"
+                            " pbl_height, baseline_aqi, bio_dec_pct, happy_seeder_pct, predicted_aqi,"
+                            " predicted_pm25, predicted_pm10, parali_pct, grap_stage, mitigation_drop)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                             5, 90, 200, 100, 0, 0, 120, 40, 70, 5, 30.0, "Stage I", 5),
+                        )
+                except Exception as exc:  # pragma: no cover - asserted below
+                    errors.append(("writer", repr(exc)))
+                    return
+
+        def retention_worker():
+            # Runs DELETE (write lock) against the same table being inserted into.
+            while not stop.is_set():
+                try:
+                    db.run_retention_cycle(apply_changes=True, backup_first=False,
+                                           tables=["simulation_history"])
+                except Exception as exc:  # pragma: no cover - asserted below
+                    errors.append(("retention", repr(exc)))
+                    return
+                time.sleep(0.02)
+
+        writer = self.start_thread(threading.Thread(target=ingest_writer))
+        pruner = self.start_thread(threading.Thread(target=retention_worker))
+        time.sleep(2.0)
+        stop.set()
+        writer.join(timeout=15)
+        pruner.join(timeout=15)
+
+        self.assertFalse(errors, f"concurrent ingestion/retention raised: {errors[:3]}")
+        verdict = db._connect_for_admin(self.db_path, readonly=True)
+        try:
+            self.assertEqual("ok", str(verdict.execute("PRAGMA integrity_check").fetchone()[0]))
+        finally:
+            verdict.close()
+
+    def test_valid_backup_restores_live_database_after_contention(self):
+        """The end-to-end recovery guarantee: after concurrent writes + prune,
+        a valid snapshot still restores the database."""
+        self.boot_db()
+        with patch_module_clock(db):
+            info = db.backup_database(label="recover")
+        restored = self.tmp / "restored2.db"
+        result = db.restore_database(info["backup_path"], target_path=str(restored), confirm=True)
+        self.assertEqual("ok", result["integrity"])
 
 
 if __name__ == "__main__":

@@ -1395,14 +1395,23 @@ def _upload_backup_to_s3(src: Path) -> Dict[str, Any]:
     secret_key = os.getenv("OFFSITE_S3_SECRET_KEY", "").strip() or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip() or None
     prefix = os.getenv("OFFSITE_S3_PREFIX", "backups").strip("/") or "backups"
     key = f"{prefix}/{src.name}"
-    client = boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        region_name=region,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-    )
-    client.upload_file(str(src), bucket, key)
+    try:
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            region_name=region,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+        )
+        client.upload_file(str(src), bucket, key)
+    except Exception as exc:
+        # Off-site failure must be REPORTED (delivered=False), never raised over
+        # the local snapshot that is already on disk. Echo only the exception
+        # class - botocore messages can include the request URL / credential
+        # scope, so we deliberately don't include str(exc).
+        logger.error("S3 off-site upload failed: %s", type(exc).__name__)
+        return {"backend": "s3", "delivered": False,
+                "reason": f"S3 upload failed: {type(exc).__name__}"}
     return {"backend": "s3", "delivered": True, "bucket": bucket, "key": key}
 
 
@@ -1509,7 +1518,37 @@ def run_retention_cycle(apply_changes: bool = False, backup_first: bool = True,
 
     pre_backup = None
     if apply_changes and backup_first:
-        pre_backup = run_backup_cycle(label="pre-retain")
+        try:
+            pre_backup = run_backup_cycle(label="pre-retain")
+        except Exception as exc:
+            # A snapshot failure (corrupt destination, disk full, DB missing)
+            # must NEVER be followed by a destructive prune: abort and let the
+            # operator see why via the returned report.
+            logger.error("Pre-retention backup raised; deletion aborted: %s", type(exc).__name__)
+            return {
+                "applied": False,
+                "aborted": True,
+                "reason": "pre_retention_backup_error",
+                "error": type(exc).__name__,
+                "eligible_tables": eligible,
+                "rejected_tables": rejected,
+                "pre_retention_backup": None,
+                "tables": {},
+            }
+        if not pre_backup.get("ok") or not pre_backup.get("backup"):
+            # Local snapshot succeeded but the cycle reported incomplete (e.g.,
+            # off-site configured and delivery failed). Under an opt-in apply
+            # mode we treat any non-ok pre-retain cycle as unsafe and abort.
+            logger.error("Pre-retention backup incomplete; deletion aborted")
+            return {
+                "applied": False,
+                "aborted": True,
+                "reason": "pre_retention_backup_incomplete",
+                "eligible_tables": eligible,
+                "rejected_tables": rejected,
+                "pre_retention_backup": pre_backup.get("backup"),
+                "tables": {},
+            }
 
     results: Dict[str, Any] = {}
     for table in eligible:
