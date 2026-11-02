@@ -250,6 +250,21 @@ def get_stations():
     air_quality_service.enrich_stations(stations)
     return stations
 
+@app.get("/api/air-quality/forecast")
+def get_air_quality_forecast(lat: float, lng: float, hours: int = 72):
+    """Real per-location hourly PM2.5/AQI forecast for the next `hours` (from the
+    current IST hour) via the Open-Meteo Air Quality API. Used by the station
+    detail modal to show each place's own time series. isLive=false when the
+    upstream feed is unreachable (hourly is then empty)."""
+    hours = max(1, min(72, int(hours)))
+    data = air_quality_service.get_forecast_hours(lat, lng, hours)
+    return {
+        "isLive": bool(data),
+        "source": "OPEN_METEO_AIR_QUALITY_LIVE" if data else "UNAVAILABLE",
+        "count": len(data),
+        "hourly": data,
+    }
+
 @app.get("/api/hotspots")
 def get_hotspots():
     """Return active fire hotspots. Prefers LIVE NASA FIRMS satellite detections
@@ -351,9 +366,17 @@ def get_multiday_forecast(
     pblHeight: int = 480,
     urbanBaselineAqi: int = 180,
     bioDecomposerAdoption: int = 25,
-    happySeederAdoption: int = 30
+    happySeederAdoption: int = 30,
+    location: str = "delhi_ncr",
+    useLive: bool = True
 ):
-    """Generate multi-day 72-hour forward atmospheric dispersion outlook with uncertainty bounds."""
+    """Generate multi-day 72-hour forward atmospheric dispersion outlook with uncertainty bounds.
+
+    By default the outlook is driven by REAL Open-Meteo forecast meteorology
+    (hourly wind speed/direction and boundary-layer height) for the next 72h; fire
+    emissions are held at the current level. Set useLive=false to force the
+    deterministic heuristic trend (offline / what-if mode).
+    """
     params = {
         "fireCount": fireCount,
         "windSpeed": windSpeed,
@@ -363,7 +386,8 @@ def get_multiday_forecast(
         "bioDecomposerAdoption": bioDecomposerAdoption,
         "happySeederAdoption": happySeederAdoption
     }
-    return predictor.generate_multiday_forecast(params)
+    met_forecast = weather_service.get_forecast_hours(location_key=location, hours=72) if useLive else []
+    return predictor.generate_multiday_forecast(params, met_forecast=met_forecast)
 
 
 @app.get("/api/v1/model/drift")

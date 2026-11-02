@@ -12,7 +12,7 @@ live sensor-modelled air quality data.
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
 import requests
@@ -81,6 +81,8 @@ class AirQualityService:
         self.cache_ttl = cache_ttl_seconds
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_time: Dict[str, float] = {}
+        self._forecast_cache: Dict[str, Any] = {}
+        self._forecast_cache_time: Dict[str, float] = {}
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "AgriSmoke-AI/2.0 (Open-Meteo Air Quality Ingestion)"
@@ -139,6 +141,70 @@ class AirQualityService:
         except Exception as e:  # network, JSON, or conversion error
             logger.warning("Live air quality fetch failed for %s: %s", key, e)
             return None
+
+    def get_forecast_hours(self, lat: float, lng: float, hours: int = 72) -> List[Dict[str, Any]]:
+        """
+        Fetch a real per-location hourly PM2.5 -> CPCB AQI forecast for the next
+        `hours` from Open-Meteo Air Quality, starting at the current IST hour.
+        Returns a list of {"time", "hourLabel", "dayLabel", "aqi", "pm25", "category"},
+        or [] on failure so the caller can degrade gracefully.
+        """
+        key = self._cache_key(lat, lng) + f":fc:{hours}"
+        now = time.time()
+        cached = self._forecast_cache.get(key)
+        if cached and (now - self._forecast_cache_time.get(key, 0)) < self.cache_ttl:
+            return cached
+
+        try:
+            params = {
+                "latitude": lat,
+                "longitude": lng,
+                "hourly": "pm2_5,pm10",
+                "forecast_days": 3,
+                "timezone": "Asia/Kolkata",
+            }
+            resp = self.session.get(AIR_QUALITY_API_URL, params=params, timeout=12)
+            if resp.status_code != 200:
+                logger.warning("Open-Meteo AQI forecast returned HTTP %s for %s", resp.status_code, key)
+                return []
+
+            hourly = resp.json().get("hourly", {})
+            times = hourly.get("time", [])
+            pm25s = hourly.get("pm2_5", [])
+            if not times:
+                return []
+
+            # Align to the current hour in IST (Open-Meteo returns local IST strings).
+            ist = timezone(timedelta(hours=5, minutes=30))
+            start_str = datetime.now(ist).strftime("%Y-%m-%dT%H:00")
+            start_idx = next((i for i, t in enumerate(times) if t >= start_str), 0)
+
+            out: List[Dict[str, Any]] = []
+            for i in range(start_idx, min(start_idx + hours, len(times))):
+                pm = pm25s[i] if i < len(pm25s) else None
+                if pm is None:
+                    continue
+                pm = float(pm)
+                aqi = _cpcb_aqi_from_pm25(pm)
+                t = times[i]
+                out.append({
+                    "time": t,
+                    "hourLabel": t[11:16],
+                    "dayLabel": t[:10],
+                    "aqi": aqi,
+                    "pm25": round(pm, 1),
+                    "category": _category_for_aqi(aqi),
+                })
+
+            if out:
+                self._forecast_cache[key] = out
+                self._forecast_cache_time[key] = now
+                return out
+            logger.warning("Open-Meteo AQI forecast had no usable rows for %s", key)
+        except Exception as e:  # network / JSON / conversion
+            logger.warning("Live AQI forecast fetch failed for %s: %s", key, e)
+
+        return []
 
     def enrich_stations(self, stations: List[Dict[str, Any]]) -> Dict[str, int]:
         """

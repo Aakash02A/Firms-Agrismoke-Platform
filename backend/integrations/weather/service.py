@@ -60,6 +60,8 @@ class WeatherService:
         self.cache_ttl: int = cache_ttl_seconds
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_time: Dict[str, float] = {}
+        self._forecast_cache: Dict[str, Any] = {}
+        self._forecast_cache_time: Dict[str, float] = {}
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "AgriSmoke-AI/2.0 (Open-Meteo Environmental Weather Ingestion)"})
 
@@ -167,6 +169,68 @@ class WeatherService:
         fallback_data["location"] = loc["name"]
         fallback_data["timestamp"] = datetime.now(timezone.utc).isoformat()
         return LiveWeatherSnapshot(**fallback_data)
+
+    def get_forecast_hours(self, location_key: str = "delhi_ncr", hours: int = 72) -> list:
+        """
+        Fetches the next `hours` hours of REAL hourly meteorology from Open-Meteo
+        (wind speed/direction, planetary boundary layer height, temperature) to
+        drive the multi-day dispersion outlook. Returns a list of dicts:
+            {"time", "windSpeed", "windDirectionDeg", "pblHeight", "temperature"}
+        Returns [] on any failure so callers can fall back to the heuristic model.
+        """
+        now = time.time()
+        loc = LOCATIONS.get(location_key, LOCATIONS["delhi_ncr"])
+        cache_key = f"{location_key}:{hours}"
+
+        cached = self._forecast_cache.get(cache_key)
+        if cached and (now - self._forecast_cache_time.get(cache_key, 0)) < self.cache_ttl:
+            return cached
+
+        try:
+            url = (
+                f"https://api.open-meteo.com/v1/forecast?"
+                f"latitude={loc['lat']}&longitude={loc['lng']}"
+                f"&hourly=wind_speed_10m,wind_direction_10m,boundary_layer_height,temperature_2m"
+                f"&forecast_hours={hours}"
+                f"&timezone=Asia%2FKolkata"
+            )
+            resp = self.session.get(url, timeout=12)
+            if resp.status_code == 200:
+                hourly = resp.json().get("hourly", {})
+                times = hourly.get("time", [])
+                winds = hourly.get("wind_speed_10m", [])
+                dirs = hourly.get("wind_direction_10m", [])
+                pbls = hourly.get("boundary_layer_height", [])
+                temps = hourly.get("temperature_2m", [])
+
+                forecast = []
+                for i, t in enumerate(times):
+                    wind = winds[i] if i < len(winds) else None
+                    pbl = pbls[i] if i < len(pbls) else None
+                    if wind is None:
+                        continue
+                    pbl_val = int(round(pbl)) if pbl is not None else 480
+                    pbl_val = max(120, min(3000, pbl_val))
+                    forecast.append({
+                        "time": t,
+                        "windSpeed": round(float(wind), 1),
+                        "windDirectionDeg": int(round(float(dirs[i]))) if i < len(dirs) and dirs[i] is not None else 305,
+                        "pblHeight": pbl_val,
+                        "temperature": round(float(temps[i]), 1) if i < len(temps) and temps[i] is not None else 24.0,
+                    })
+
+                if forecast:
+                    self._forecast_cache[cache_key] = forecast
+                    self._forecast_cache_time[cache_key] = now
+                    logger.info("Fetched %dh live hourly forecast for %s from Open-Meteo", len(forecast), loc["name"])
+                    return forecast
+                logger.warning("Open-Meteo forecast returned no usable hourly rows for %s. Using heuristic fallback.", loc["name"])
+            else:
+                logger.warning("Open-Meteo forecast returned status %s for %s. Using heuristic fallback.", resp.status_code, loc["name"])
+        except Exception as e:
+            logger.warning("Failed to fetch hourly forecast from Open-Meteo (%s). Using heuristic fallback.", e)
+
+        return []
 
     def refresh_cache(self, location_key: str = "delhi_ncr") -> LiveWeatherSnapshot:
         """Explicitly forces a cache invalidation and fresh fetch."""

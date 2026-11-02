@@ -344,10 +344,16 @@ class AtmosphericMLPredictor:
 
         return hourly
 
-    def generate_multiday_forecast(self, base_params: dict, start_hour: int = None) -> dict:
+    def generate_multiday_forecast(self, base_params: dict, start_hour: int = None, met_forecast: list = None) -> dict:
         """
         Generates a multi-day 72-hour forward atmospheric dispersion outlook.
-        Models day-over-day stubble accumulation and meteorological synoptic patterns across 3 days.
+
+        When `met_forecast` (a list of hourly dicts from Open-Meteo: {windSpeed,
+        windDirectionDeg, pblHeight, ...}) is supplied, the outlook is driven by
+        REAL forecast meteorology hour-by-hour; fire emissions are held at the
+        current level (the only modeled input) and honestly labeled. When it is
+        absent/short, the method falls back to a deterministic seasonal heuristic
+        so the endpoint still works offline.
         """
         import datetime
         now = datetime.datetime.now()
@@ -361,7 +367,10 @@ class AtmosphericMLPredictor:
         hourly_72 = []
         day_points = {0: [], 1: [], 2: []}
 
-        # Multi-day synoptic weather trends across 72 hours
+        use_live = bool(met_forecast) and len(met_forecast) >= 24
+        met_source = "OPEN_METEO_LIVE" if use_live else "HEURISTIC_FALLBACK"
+
+        # Multi-day synoptic weather trends across 72 hours (heuristic fallback only)
         day_synoptic_modifiers = [
             {"dayLabel": "Day 1 (Next 24h)", "fireMod": 1.00, "windMod": 1.00, "note": "Current atmospheric trajectory with active NW stubble transport"},
             {"dayLabel": "Day 2 (24h - 48h)", "fireMod": 1.08, "windMod": 0.92, "note": "Persistent nocturnal boundary layer compression; slight stagnation"},
@@ -371,28 +380,44 @@ class AtmosphericMLPredictor:
         for step in range(72):
             day_idx = step // 24
             h = (start_hour + step) % 24
-            mod = day_synoptic_modifiers[day_idx]
 
-            # Diurnal factor
-            if 13 <= h <= 16:
-                diurnal_factor = 0.82
-            elif 1 <= h <= 6:
-                diurnal_factor = 1.28
-            elif 19 <= h <= 23:
-                diurnal_factor = 1.15
+            if use_live:
+                met = met_forecast[min(step, len(met_forecast) - 1)]
+                sim_wind = max(0.0, float(met.get("windSpeed", base_wind)))
+                sim_dir = int(met.get("windDirectionDeg", base_params.get("windDirectionDeg", 305)))
+                sim_pbl = int(met.get("pblHeight", base_pbl))
+                # Emissions held at current level (only modeled input; met is live)
+                sim_fires = max(0, round(base_fires))
+                step_params = {
+                    **base_params,
+                    "fireCount": sim_fires,
+                    "pblHeight": sim_pbl,
+                    "windSpeed": sim_wind,
+                    "windDirectionDeg": sim_dir
+                }
             else:
-                diurnal_factor = 0.96
+                mod = day_synoptic_modifiers[day_idx]
+                # Diurnal factor
+                if 13 <= h <= 16:
+                    diurnal_factor = 0.82
+                elif 1 <= h <= 6:
+                    diurnal_factor = 1.28
+                elif 19 <= h <= 23:
+                    diurnal_factor = 1.15
+                else:
+                    diurnal_factor = 0.96
 
-            sim_pbl = round(base_pbl * mod["windMod"] * (2.0 - diurnal_factor))
-            sim_wind = max(3.0, round(base_wind * mod["windMod"] * (1.2 if 12 <= h <= 17 else 0.8), 1))
-            sim_fires = max(0, round(base_fires * mod["fireMod"]))
+                sim_pbl = round(base_pbl * mod["windMod"] * (2.0 - diurnal_factor))
+                sim_wind = max(3.0, round(base_wind * mod["windMod"] * (1.2 if 12 <= h <= 17 else 0.8), 1))
+                sim_fires = max(0, round(base_fires * mod["fireMod"]))
+                sim_dir = int(base_params.get("windDirectionDeg", 305))
 
-            step_params = {
-                **base_params,
-                "fireCount": sim_fires,
-                "pblHeight": sim_pbl,
-                "windSpeed": sim_wind
-            }
+                step_params = {
+                    **base_params,
+                    "fireCount": sim_fires,
+                    "pblHeight": sim_pbl,
+                    "windSpeed": sim_wind
+                }
 
             pred = self.predict(step_params)
             forecast_time = (now + datetime.timedelta(hours=step)).strftime("%a %H:00")
@@ -409,6 +434,8 @@ class AtmosphericMLPredictor:
                 "stubblePct": pred["paraliPct"],
                 "pbl": sim_pbl,
                 "windSpeed": sim_wind,
+                "windDirectionDeg": sim_dir,
+                "corridorAlignmentPct": pred.get("dirFactor"),
                 "category": pred["category"],
                 "color": pred["categoryColor"],
                 "estimatedAod": pred["satelliteAodProxy"]["estimatedAod550nm"]
@@ -426,6 +453,14 @@ class AtmosphericMLPredictor:
             peak_point = max(pts, key=lambda p: p["aqi"])
             cat = self.get_category_for_aqi(mean_aqi)
 
+            if use_live:
+                mean_wind = round(sum(p["windSpeed"] for p in pts) / len(pts), 1)
+                pbls = [p["pbl"] for p in pts]
+                note = (f"Open-Meteo forecast: mean wind {mean_wind} km/h, "
+                        f"PBL {min(pbls)}-{max(pbls)} m; emissions held at current level")
+            else:
+                note = day_synoptic_modifiers[day_idx]["note"]
+
             day_summaries.append({
                 "day": day_idx + 1,
                 "label": day_synoptic_modifiers[day_idx]["dayLabel"],
@@ -436,11 +471,13 @@ class AtmosphericMLPredictor:
                 "categoryColor": cat["color"],
                 "grapStage": cat["grapStage"],
                 "stubbleSharePct": round(sum(p["stubblePct"] for p in pts) / len(pts), 1),
-                "synopticNote": day_synoptic_modifiers[day_idx]["note"]
+                "synopticNote": note
             })
 
         return {
             "horizonHours": 72,
+            "metSource": met_source,
+            "emissionBasis": "held_constant" if use_live else "heuristic_trend",
             "daySummaries": day_summaries,
             "hourly": hourly_72
         }

@@ -43,6 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let liveSimulationInterval = null;
     let lastTelemetryTime = Date.now();
+    let lastTelemetryIsLive = false;
     let tickerInterval = null;
     let lastCalculatedPred = null;
     let lastCalculatedHourly = null;
@@ -723,7 +724,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     <p><strong>Station Classification:</strong> ${st.type}</p>
                     <p><strong>Airshed Inflow Exposure:</strong> Direct path for smoke plumes entering through the North-West corridor during north-westerly wind regimes.</p>
                 </div>
+                <div style="margin-top:18px;border-top:1px solid #e2e8f0;padding-top:14px;">
+                    <div style="font-weight:600;font-size:13px;margin-bottom:8px;">Next 24 hours &mdash; live AQI <span style="font-weight:400;color:#64748b;font-size:11px;">(Open-Meteo Air Quality)</span></div>
+                    <div id="modal-forecast-hours" style="display:flex;gap:4px;overflow-x:auto;padding-bottom:6px;">Loading live forecast&hellip;</div>
+                    <div style="font-weight:600;font-size:13px;margin:14px 0 8px;">3-day outlook</div>
+                    <div id="modal-forecast-days" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+                </div>
             `;
+            loadStationForecast(st);
         } else if (item.type === 'fire') {
             const f = item.data;
             modalTitle.textContent = `Fire Anomaly Cluster: ${f.district}, ${f.state}`;
@@ -753,6 +761,49 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }
         modal.classList.add('visible');
+    }
+
+    // Load a real per-place hourly AQI time series (Open-Meteo Air Quality) into
+    // the station modal: next 24h strip + a 3-day outlook. Degrades gracefully
+    // when the backend is offline or the location feed is unavailable.
+    async function loadStationForecast(st) {
+        const hoursEl = document.getElementById('modal-forecast-hours');
+        const daysEl = document.getElementById('modal-forecast-days');
+        if (!hoursEl || !daysEl) return;
+        if (!isBackendConnected) {
+            hoursEl.innerHTML = '<span style="color:#64748b;font-size:12px;">Live per-place forecast requires the backend connection.</span>';
+            daysEl.innerHTML = '';
+            return;
+        }
+        try {
+            const res = await fetch(`${API_BASE}/api/air-quality/forecast?lat=${st.lat}&lng=${st.lng}&hours=72`);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            if (!data.isLive || !Array.isArray(data.hourly) || !data.hourly.length) {
+                hoursEl.innerHTML = '<span style="color:#64748b;font-size:12px;">Forecast unavailable for this location right now.</span>';
+                daysEl.innerHTML = '';
+                return;
+            }
+            const colorFor = (aqi) => (map && map.getAqiColor) ? map.getAqiColor(aqi) : '#64748b';
+            const hourly = data.hourly;
+
+            hoursEl.innerHTML = hourly.slice(0, 24).map(h => {
+                return `<div style="min-width:46px;text-align:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:4px 2px;" title="${h.category}"><div style="font-size:10px;color:#64748b;">${h.hourLabel}</div><div style="font-size:14px;font-weight:700;color:${colorFor(h.aqi)};">${h.aqi}</div></div>`;
+            }).join('');
+
+            const byDay = {};
+            hourly.forEach(h => { (byDay[h.dayLabel] = byDay[h.dayLabel] || []).push(h.aqi); });
+            const dayNames = ['Today', 'Tomorrow', 'Day 3'];
+            daysEl.innerHTML = Object.keys(byDay).slice(0, 3).map((d, idx) => {
+                const arr = byDay[d];
+                const mean = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+                const peak = Math.max(...arr);
+                return `<div style="flex:1;min-width:110px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;"><div style="font-size:11px;color:#64748b;">${dayNames[idx] || d}</div><div style="font-size:20px;font-weight:700;color:${colorFor(mean)};">${mean}</div><div style="font-size:10.5px;color:#475569;">peak ${peak} AQI</div></div>`;
+            }).join('');
+        } catch (e) {
+            hoursEl.innerHTML = '<span style="color:#dc2626;font-size:12px;">Could not load forecast: ' + e.message + '</span>';
+            daysEl.innerHTML = '';
+        }
     }
 
     modalClose?.addEventListener('click', () => {
@@ -1071,12 +1122,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateTelemetryTickerText() {
         const syncEl = document.getElementById('telemetry-sync-time');
         if (!syncEl) return;
-        const elapsedSec = Math.floor((Date.now() - lastTelemetryTime) / 1000);
-        if (elapsedSec <= 1) {
-            syncEl.textContent = "Synced just now";
-        } else {
-            syncEl.textContent = `Synced ${elapsedSec}s ago`;
-        }
+        const d = new Date(lastTelemetryTime);
+        const pad = (n) => String(n).padStart(2, '0');
+        const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        syncEl.textContent = `${lastTelemetryIsLive ? 'Live' : 'Sample'} \u00b7 synced ${clock}`;
     }
 
     function stopLiveSim() {
@@ -1086,16 +1135,63 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Bind Station Pills in the Live Telemetry Ticker
-    document.querySelectorAll('.station-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
+    // Bind Station Pills in the Live Telemetry Ticker (event delegation: chips are re-rendered live)
+    const liveStationPills = document.getElementById('live-station-pills');
+    if (liveStationPills) {
+        liveStationPills.addEventListener('click', (e) => {
+            const chip = e.target.closest('.station-chip');
+            if (!chip) return;
             const stId = chip.getAttribute('data-station-id');
-            const station = DEMO_DATA.monitoringStations.find(s => s.id === stId);
+            const station = DEMO_DATA.monitoringStations.find(s => String(s.id) === stId);
             if (station) {
                 showDetailModal({ type: 'station', data: station });
             }
         });
-    });
+    }
+
+    // Map an AQI value to a chip color-band class
+    function aqiBandClass(aqi) {
+        if (aqi <= 50) return 'good';
+        if (aqi <= 200) return 'moderate';
+        if (aqi <= 400) return 'verypoor';
+        if (aqi <= 450) return 'severe';
+        return 'emergency';
+    }
+
+    // Shorten "Anand Vihar, Delhi" -> "Anand Vihar" for compact chips
+    function shortStationName(name) {
+        if (!name) return 'Station';
+        const s = String(name).split('(')[0].split(',')[0].trim();
+        return s || String(name);
+    }
+
+    // Render the sidebar "LIVE TELEMETRY STREAM" chips from station data.
+    // When the backend is connected these carry live Open-Meteo Air Quality
+    // readings (station.live === true); otherwise calibrated demo values.
+    function renderLiveStationChips() {
+        const container = document.getElementById('live-station-pills');
+        if (!container) return;
+        const stations = (DEMO_DATA.monitoringStations || [])
+            .slice()
+            .sort((a, b) => (b.aqi || 0) - (a.aqi || 0))
+            .slice(0, 7);
+        if (!stations.length) return;
+
+        let anyLive = false;
+        container.innerHTML = stations.map(st => {
+            if (st.live) anyLive = true;
+            const band = aqiBandClass(st.aqi || 0);
+            const aqiVal = Math.round(st.aqi || 0);
+            const tip = `${st.category || ''}${st.live ? ' \u00b7 live' : ' \u00b7 sample'}`.trim();
+            return `<span class="station-chip ${band}" data-station-id="${st.id}" title="${tip}"><span class="chip-dot"></span>${shortStationName(st.name)}: <strong>${aqiVal}</strong></span>`;
+        }).join('');
+
+        lastTelemetryIsLive = anyLive;
+        lastTelemetryTime = Date.now();
+        updateTelemetryTickerText();
+    }
+
+    renderLiveStationChips();
 
     // 13b. NASA FIRMS Satellite Telemetry Controls
     const firmsSensorSelect = document.getElementById('firms-sensor-select');
@@ -1376,7 +1472,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (stationsRes.ok) {
                 const stations = await stationsRes.json();
-                if (stations && stations.length) DEMO_DATA.monitoringStations.splice(0, DEMO_DATA.monitoringStations.length, ...stations);
+                if (stations && stations.length) {
+                    DEMO_DATA.monitoringStations.splice(0, DEMO_DATA.monitoringStations.length, ...stations);
+                    renderLiveStationChips();
+                }
             }
             if (hotspotsRes.ok) {
                 const hotspots = await hotspotsRes.json();
