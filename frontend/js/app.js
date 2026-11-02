@@ -600,12 +600,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 7. Scenario Presets Handler
-    document.querySelectorAll('[data-preset]').forEach(btn => {
+    const presetButtons = document.querySelectorAll('[data-preset]');
+    presetButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             const presetKey = btn.getAttribute('data-preset');
             const preset = DEMO_DATA.presets[presetKey];
             if (preset) {
                 setInputsToUI(preset);
+                // Highlight the clicked preset as the active selection
+                presetButtons.forEach(b => b.classList.remove('btn-primary'));
+                btn.classList.add('btn-primary');
                 showNotification(`Applied Preset: ${preset.name}`, "info");
             }
         });
