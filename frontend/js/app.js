@@ -113,9 +113,10 @@ document.addEventListener('DOMContentLoaded', () => {
             panel.classList.toggle('active', panel.id === `tab-${tabId}`);
         });
 
-        // If map tab is selected, trigger resize and re-init particles
-        if (tabId === 'map' && map) {
-            setTimeout(() => {
+        // If map tab is selected, trigger resize, re-init particles, and load the 3-day outlook
+        if (tabId === 'map') {
+            loadMultidayOutlook();
+            if (map) setTimeout(() => {
                 map.resize();
                 map.reinitParticles();
             }, 60);
@@ -805,6 +806,48 @@ document.addEventListener('DOMContentLoaded', () => {
             daysEl.innerHTML = '';
         }
     }
+
+    // 3-Day Airshed Outlook module: fetch the 72h dispersion forecast for the
+    // current scenario and render day-summary cards + an hourly AQI curve.
+    async function loadMultidayOutlook() {
+        const daysEl = document.getElementById('outlook-day-cards');
+        const chartEl = document.getElementById('chart-outlook-hourly');
+        const badgeEl = document.getElementById('outlook-met-badge');
+        const noteEl = document.getElementById('outlook-note');
+        if (!daysEl || !chartEl) return;
+        if (!isBackendConnected) {
+            daysEl.innerHTML = '<span style="color:#64748b;font-size:12px;">Connect the backend to view the 72-hour airshed outlook.</span>';
+            chartEl.innerHTML = '';
+            return;
+        }
+        daysEl.innerHTML = '<span style="color:#64748b;font-size:12px;">Loading 72-hour outlook\u2026</span>';
+        try {
+            const q = new URLSearchParams(currentInputs).toString();
+            const res = await fetch(`${API_BASE}/api/v1/forecast/multiday?${q}`);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            const live = data.metSource === 'OPEN_METEO_LIVE';
+            if (badgeEl) {
+                badgeEl.textContent = live ? 'Live meteorology \u00b7 Open-Meteo 72h forecast' : 'Heuristic scenario \u00b7 offline met fallback';
+                badgeEl.style.color = live ? 'var(--accent-primary)' : '#d97706';
+            }
+            if (noteEl) noteEl.textContent = live
+                ? 'Real Open-Meteo wind & boundary-layer height drive each hour; fire emissions held at the current scenario level.'
+                : 'Open-Meteo meteorology unavailable \u2014 showing the deterministic seasonal trend instead.';
+            daysEl.innerHTML = (data.daySummaries || []).map(d => `
+                <div style="flex:1;min-width:150px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:11px;color:var(--text-muted);">${d.label}</div>
+                    <div style="font-size:24px;font-weight:700;color:${d.categoryColor};line-height:1.1;">${d.meanAqi}</div>
+                    <div style="font-size:11px;color:var(--text-secondary);">${d.dominantCategory} \u00b7 ${d.grapStage}</div>
+                    <div style="font-size:10.5px;color:var(--text-muted);margin-top:4px;">peak ${d.peakAqi} @ ${d.peakTime}</div>
+                </div>`).join('');
+            charts.renderHourlyForecastChart('chart-outlook-hourly', data.hourly || []);
+        } catch (e) {
+            daysEl.innerHTML = '<span style="color:#dc2626;font-size:12px;">Could not load outlook: ' + e.message + '</span>';
+        }
+    }
+
+    document.getElementById('btn-refresh-outlook')?.addEventListener('click', loadMultidayOutlook);
 
     modalClose?.addEventListener('click', () => {
         modal.classList.remove('visible');
@@ -1504,6 +1547,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Hydrate live NASA FIRMS observations
             await loadFirmsData();
+
+            // Refresh the 3-day airshed outlook panel (map tab) with current data
+            loadMultidayOutlook();
         } catch (err) {
             console.error("Error hydrating data from SQLite:", err);
         }

@@ -307,6 +307,21 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 3-Day Airshed Outlook (72h dispersion forecast) -->
+            <div class="card" style="margin-top:14px;">
+                <div
+                    style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+                    <div>
+                        <h2 class="card-title" style="font-size:14px;">3-Day Airshed Outlook &mdash; Delhi-NCR</h2>
+                        <p class="card-subtitle" id="outlook-met-badge" style="font-size:11px;margin:2px 0 0;">72-hour dispersion forecast</p>
+                    </div>
+                    <button class="btn btn-sm" id="btn-refresh-outlook" title="Recompute from current scenario inputs">&#8635; Refresh</button>
+                </div>
+                <div id="outlook-day-cards" style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;"></div>
+                <div id="chart-outlook-hourly" style="width:100%;height:240px;"></div>
+                <p id="outlook-note" style="font-size:11px;color:var(--text-muted);margin:8px 0 0;">Reflects the current scenario inputs on the AI Prediction tab.</p>
+            </div>
         </section>
 
         <!-- =========================================================================

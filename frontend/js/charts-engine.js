@@ -176,6 +176,66 @@ class AgriSmokeChartsEngine {
     }
 
     /**
+     * Render 72-Hour Airshed Dispersion Outlook (line + 90% confidence band)
+     * hourly: [{ time, aqi, aqiLower, aqiUpper, category, windSpeed, pbl, dayIndex }]
+     */
+    renderHourlyForecastChart(containerId, hourly) {
+        const container = document.getElementById(containerId);
+        if (!container || !hourly || !hourly.length) {
+            if (container) container.innerHTML = '<div style="color:#64748b;font-size:12px;padding:12px;">No forecast data available.</div>';
+            return;
+        }
+
+        const width = container.clientWidth || 720;
+        const height = 240;
+        const margin = { top: 16, right: 18, bottom: 30, left: 44 };
+        const chartW = width - margin.left - margin.right;
+        const chartH = height - margin.top - margin.bottom;
+        const n = hourly.length;
+
+        const upVals = hourly.map(h => h.aqiUpper || h.aqi);
+        const yMax = Math.max(500, Math.ceil(Math.max(...upVals) / 100) * 100);
+        const xAt = (i) => margin.left + (n > 1 ? (i / (n - 1)) * chartW : 0);
+        const yAt = (v) => margin.top + chartH - (Math.min(v, yMax) / yMax) * chartH;
+
+        const bandPath =
+            hourly.map((h, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(1)} ${yAt(h.aqiUpper || h.aqi).toFixed(1)}`).join(' ') +
+            ' ' +
+            hourly.slice().reverse().map((h, j) => { const i = n - 1 - j; return `L ${xAt(i).toFixed(1)} ${yAt(h.aqiLower != null ? h.aqiLower : h.aqi).toFixed(1)}`; }).join(' ') +
+            ' Z';
+
+        const linePath = hourly.map((h, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(1)} ${yAt(h.aqi).toFixed(1)}`).join(' ');
+
+        const gridVals = [0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
+
+        let svg = `
+        <svg viewBox="0 0 ${width} ${height}" class="chart-svg" style="width:100%;height:100%;">
+            ${gridVals.map(val => {
+                const y = yAt(val);
+                return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e2e8f0"/>
+                        <text x="${margin.left - 6}" y="${y + 4}" fill="#64748b" font-size="9" text-anchor="end" font-family="monospace">${val}</text>`;
+            }).join('')}
+
+            <!-- Day separators at 24h and 48h -->
+            ${[24, 48].map(i => i < n ? `<line x1="${xAt(i)}" y1="${margin.top}" x2="${xAt(i)}" y2="${margin.top + chartH}" stroke="#cbd5e1" stroke-dasharray="3 3"/>` : '').join('')}
+
+            <path d="${bandPath}" fill="#0284c7" opacity="0.12"/>
+            <path d="${linePath}" fill="none" stroke="#0284c7" stroke-width="2.2"/>
+
+            ${hourly.map((h, i) => i % 3 === 0 ? `<circle cx="${xAt(i)}" cy="${yAt(h.aqi)}" r="2.6" fill="#ffffff" stroke="#0284c7" stroke-width="1.6"
+                data-chart-tooltip="<strong>${h.time}</strong><br>AQI: <strong style='color:#0284c7'>${h.aqi}</strong> (${h.category})<br>Range: ${h.aqiLower}&ndash;${h.aqiUpper}<br>Wind: ${h.windSpeed} km/h &bull; PBL: ${h.pbl} m"
+            />` : '').join('')}
+
+            <!-- X axis labels -->
+            ${[[0, 'Now'], [24, '+24h'], [48, '+48h'], [n - 1, '+72h']].map(([i, lbl]) =>
+                `<text x="${xAt(i)}" y="${margin.top + chartH + 18}" fill="#64748b" font-size="9" text-anchor="middle">${lbl}</text>`).join('')}
+        </svg>`;
+
+        container.innerHTML = svg;
+        this.attachPointTooltips(container);
+    }
+
+    /**
      * Render Source Apportionment Donut Chart
      */
     renderSourceDonut(containerId, sources) {
