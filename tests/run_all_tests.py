@@ -28,6 +28,7 @@ TEST_SCRIPTS = [
     ("SQLite Production Readiness (WAL/backup/retention)", "test_sqlite_production.py"),
     ("Scheduler Ingestion & Backup Automation", "test_scheduler_maintenance.py"),
     ("NASA FIRMS Ingestion & Intelligence Layer", "test_nasa_firms.py"),
+    ("On-Demand NASA FIRMS (Stateless Public Deployment)", "test_firms_on_demand.py"),
     ("Machine Learning & Physical Dispersion", "test_ml_model.py"),
     ("FastAPI Backend & API Endpoints", "test_backend_api.py"),
     ("Secret Leakage & Redaction Hardening", "test_security_scrubbing.py")

@@ -283,10 +283,19 @@ def get_air_quality_forecast(lat: float, lng: float, hours: int = 72):
 def get_hotspots():
     """Return active fire hotspots. Prefers LIVE NASA FIRMS satellite detections
     aggregated by district; falls back to seeded reference hotspots when no live
-    observations have been synced yet (e.g. MAP key not configured)."""
+    observations have been synced yet (e.g. MAP key not configured).
+
+    On a stateless deployment with no ingestion scheduler, when FIRMS_ON_DEMAND
+    is enabled a short-lived, single-flight cached live snapshot is fetched
+    on-the-fly (no DB writes) before resorting to the seeded fallback."""
     live = db.get_live_fire_hotspots()
     if live:
         return live
+    if config.firms_on_demand:
+        from backend.integrations.nasa_firms import on_demand
+        snapshot = on_demand.get_live_hotspots()
+        if snapshot:
+            return snapshot
     return db.get_fire_hotspots()
 
 @app.get("/api/trends/weekly")
@@ -297,10 +306,16 @@ def get_weekly_trends():
 @app.get("/api/districts")
 def get_district_rankings():
     """District-wise stubble burning counts. Uses LIVE NASA FIRMS aggregates when
-    available, otherwise the seeded district counts."""
+    available, otherwise the seeded district counts. Honors FIRMS_ON_DEMAND the
+    same way /api/hotspots does for scheduler-less stateless deployments."""
     live = db.get_live_district_fire_counts()
     if live:
         return live
+    if config.firms_on_demand:
+        from backend.integrations.nasa_firms import on_demand
+        snapshot = on_demand.get_live_district_counts()
+        if snapshot:
+            return snapshot
     return db.get_district_fire_counts()
 
 @app.get("/api/grap")

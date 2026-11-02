@@ -84,6 +84,18 @@ class AppConfig:
         self.scheduler_enabled: bool = _get_bool("SCHEDULER_ENABLED", True)
         self.maintenance_enabled: bool = _get_bool("MAINTENANCE_ENABLED", True)
 
+        # On-demand NASA FIRMS fetching for stateless/public deployments that run
+        # NO background ingestion scheduler. When true, the fire hotspots and
+        # district-count endpoints pull a LIVE FIRMS snapshot on the read path and
+        # hold it in a short-lived, single-flight in-memory cache (never written to
+        # the DB), so visitors see current satellite data without a persistent
+        # store or a continuously-running job. Default OFF keeps the existing
+        # scheduler-driven behavior untouched; bounded by TTL so free-tier outbound
+        # traffic limits are respected. Requires NASA_FIRMS_MAP_KEY; without it the
+        # endpoints transparently fall back to the seeded reference data.
+        self.firms_on_demand: bool = _get_bool("FIRMS_ON_DEMAND", False)
+        self.firms_on_demand_ttl: int = _get_int("FIRMS_ON_DEMAND_TTL_SECONDS", 900)
+
     def _resolve_cors_origins(self) -> List[str]:
         raw = os.getenv("CORS_ORIGINS", "").strip()
         if raw:

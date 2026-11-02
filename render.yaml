@@ -1,88 +1,95 @@
 # ==============================================================================
-# AgriSmoke AI - Render Blueprint (Infrastructure as Code)
-# Docs: https://render.com/docs/blueprint-spec
+# AgriSmoke AI - Render Blueprint (FREE / STATELESS PUBLIC DEPLOYMENT)
+# Docs: https://render.com/docs/blueprint-spec  ·  https://render.com/docs/free
 #
-# Usage: push this repo to GitHub, then in the Render dashboard choose
-#        "New +" -> "Blueprint" and select this repo. Render reads this file.
+# This deployment is a genuinely PUBLIC, READ-ONLY website on the Render FREE
+# compute plan. There are no accounts, no logins and NO persistent storage.
+# The architecture is deliberately stateless:
 #
-# SECRETS: values marked isSecret are stored encrypted by Render and must be
-# entered in the Render dashboard (never committed here). See .env.example.
+#   Visitors -> Render Free web service -> FastAPI + Vanilla JS frontend
+#            -> SQLite on the container's EPHEMERAL disk (recreated + seeded at
+#               every boot by backend/database.py::ensure_ready())
+#            -> NASA FIRMS + Open-Meteo fetched ON DEMAND (short-lived cache)
+#            -> CSV/PDF reports generated in memory / client-side, never stored
+#
+# WHY FREE WORKS HERE (and its hard limits, from Render's free-tier docs):
+#   * Free compute = 0.1 CPU / 512 MB RAM, a single instance, NO persistent disk.
+#   * Free services SPIN DOWN after 15 min idle; the next request cold-starts in
+#     ~1 min (Render shows a loading page). Any runtime file writes are LOST on
+#     spin-down/restart - which is fine because the DB is reference-seeded at boot.
+#   * 750 free instance-hours/month; spun-down time does NOT count.
+#   * Render may suspend a free service that generates a HIGH volume of
+#     service-initiated (outbound) API traffic - so background schedulers are OFF
+#     and live data uses a traffic-independent, single-flight cached fetch.
+#
+# NOTE: The persistent-disk + paid-plan production setup is preserved for future
+# use in deploy/Dockerfile (Docker runtime). This blueprint intentionally does
+# NOT use Docker, because Render's Free tier is verified for native Python runtimes.
 # ==============================================================================
 
 services:
   - type: web
     name: agrismoke-ai
-    runtime: docker
-    dockerfilePath: ./deploy/Dockerfile
-    dockerContext: .
-    plan: standard                      # REQUIRED: Render persistent disks are unavailable on the free/starter tiers
-    region: oregon                      # change to your nearest Render region
+    runtime: python                   # native Python buildpack (free-compatible)
+    plan: free                        # genuinely free tier; no paid instance
+    region: oregon                    # change to your nearest Render region
+
+    # Install deps AND train the ML model during the (cached) build step, because
+    # the model artifacts (*.joblib) are git-ignored and must exist before serving.
+    # Doing it here - not at request time - keeps cold starts light on 512 MB RAM.
+    buildCommand: pip install -r backend/requirements.txt && python ai-ml/train_model.py
+
+    # Single process (no --workers / --reload): exactly one scheduler instance,
+    # and schedulers are disabled below anyway. Binds 0.0.0.0:$PORT (Render sets PORT).
+    startCommand: python backend/run.py
     healthCheckPath: /api/health
+
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.13"
+
+      # ---- Security posture (production defaults, restated for defense-in-depth) ----
       - key: ENVIRONMENT
-        value: production               # read-only + docs off + HSTS by default
-      - key: HOST
-        value: 0.0.0.0
-      - key: PORT
-        value: "10000"                  # Render routes external 443 -> this port
-      # Render-managed persistent volume so SQLite survives restarts/redeploys.
-      # The mount path MUST be this env var's directory (backend/database.py
-      # creates the parent dir and seeds a fresh volume at startup via ensure_ready()).
+        value: production             # read-only + docs off + HSTS + rate limit by default
+      - key: READ_ONLY
+        value: "true"                 # block all public write endpoints (no DB mutations)
+      - key: DOCS_ENABLED
+        value: "false"                # do not expose the API surface publicly
+
+      # ---- Stateless storage ----
+      # SQLite lives on the container's ephemeral filesystem. It is created,
+      # schema-applied, WAL-enabled and reference-SEEDED automatically at startup
+      # by ensure_ready(); nothing user-generated is ever persisted. /tmp is
+      # guaranteed writable. NO persistent disk is configured (free tier cannot).
       - key: DB_PATH
-        value: /var/data/agri_smoke.db
-      - key: NASA_FIRMS_MAP_KEY
-        secret: true                    # set value in Render dashboard
-      - key: CORS_ORIGINS
-        value: ""                       # same-origin (frontend served by this app)
+        value: /tmp/agri_smoke.db
 
-      # ---- Background jobs (single instance runs them exactly once) ----
+      # ---- No background jobs ----
+      # Free tier throttles service-initiated traffic; retention/backup are
+      # meaningless on an ephemeral disk. Ingestion is replaced by on-demand fetch.
       - key: SCHEDULER_ENABLED
-        value: "true"
+        value: "false"
       - key: MAINTENANCE_ENABLED
+        value: "false"
+
+      # ---- Live fire data WITHOUT a scheduler (decision #7) ----
+      # Fetches NASA FIRMS on the read path into a short-lived, single-flight
+      # in-memory cache (no DB writes). The number of NASA calls is bounded by the
+      # TTL, NOT by visitor traffic, so it stays well within free-tier limits. If
+      # the MAP key is unset or the provider errors, endpoints fall back to the
+      # seeded reference data. Safe default enabled here; the code default is off.
+      - key: FIRMS_ON_DEMAND
         value: "true"
-      - key: FIRMS_INTERVAL_SECONDS
-        value: "10800"                  # NASA FIRMS sync every 3h
-      - key: WEATHER_INTERVAL_SECONDS
-        value: "900"                    # weather cache refresh every 15m
+      - key: FIRMS_ON_DEMAND_TTL_SECONDS
+        value: "900"                  # 15 min => at most ~96 NASA fetches/day
 
-      # ---- SQLite backup automation ----
-      - key: BACKUP_INTERVAL_SECONDS
-        value: "21600"                  # snapshot every 6h (plus once at boot)
-      - key: BACKUP_RETENTION_KEEP
-        value: "10"                     # keep newest 10 local snapshots
-      - key: RETENTION_INTERVAL_SECONDS
-        value: "86400"                  # prune aged rows daily (first run is deferred one full interval after boot)
-      - key: RETENTION_APPLY
-        value: "false"                  # SAFE DEFAULT: dry-run (counts only). Set true only as an explicit opt-in to delete aged rows
-      - key: BACKUP_BEFORE_RETAIN
-        value: "true"                   # always snapshot before a destructive prune
-      - key: SQLITE_MIN_FREE_MB
-        value: "512"                    # warn when the volume drops below this
+      # Optional. A free NASA Earthdata MAP_KEY enables the live fire layer; if it
+      # is left blank the site still works, showing clearly-fallback reference data.
+      # `sync: false` is Render's Blueprint field to prompt for a secret value in the
+      # dashboard at creation without hardcoding it (https://render.com/docs/blueprint-spec).
+      - key: NASA_FIRMS_MAP_KEY
+        sync: false                   # prompted once in the Render dashboard; never stored in git
 
-      # ---- Off-site backup / DISASTER RECOVERY ----
-      # Snapshots on /var/data are NOT off-site. Recommended: an S3-compatible
-      # bucket (Cloudflare R2 / Backblaze B2 / AWS S3 / MinIO) - set
-      # OFFSITE_BACKEND=s3 and fill the secret keys in the dashboard (requires
-      # boto3 in the image). The "directory" option copies to a SEPARATE mount,
-      # e.g. a second Render disk at /var/offsite (adds diskMounts entry below).
-      - key: OFFSITE_BACKEND
-        value: "none"                   # none | directory | s3
-      - key: OFFSITE_S3_BUCKET
+      # Same-origin: the frontend is served by this same app, so no CORS needed.
+      - key: CORS_ORIGINS
         value: ""
-      - key: OFFSITE_S3_ENDPOINT
-        value: ""
-      - key: OFFSITE_S3_REGION
-        value: ""
-      - key: OFFSITE_S3_ACCESS_KEY
-        secret: true                    # optional; falls back to env if unset
-      - key: OFFSITE_S3_SECRET_KEY
-        secret: true                    # SECRET - redacted from all logs
-    diskMounts:
-      - name: agrismoke-data
-        mountPath: /var/data
-        sizeGB: 1
-        # For OFFSITE_BACKEND=directory, add a SECOND independent disk and point
-        # OFFSITE_BACKUP_DIR at it, e.g.:
-        #   - name: agrismoke-offsite
-        #     mountPath: /var/offsite
-        #     sizeGB: 1
