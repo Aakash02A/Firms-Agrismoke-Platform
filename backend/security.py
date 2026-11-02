@@ -8,6 +8,7 @@ HTTP responses, scheduler telemetry) receives already-safe strings.
 No third-party dependencies.
 """
 
+import os
 import re
 from typing import Iterable, List, Optional
 
@@ -18,6 +19,24 @@ _CRED_IN_URL = re.compile(r"(\b[a-zA-Z][a-zA-Z0-9.+\-]*://)[^/@\s]*@")
 # NASA FIRMS places the MAP_KEY as the path segment right after /csv/ in both
 # the area and data-availability endpoints: /api/area/csv/<MAP_KEY>/<sensor>/...
 _FIRMS_KEY_PATH = re.compile(r"(/api/(?:area|data_availability)/csv/)[^/]+/")
+
+# Environment variables whose values are secrets. Anything derived from them
+# (connection strings, MAP keys, tokens) must never reach logs, the database,
+# or an HTTP response. Checked at call time so tests and dotenv reloads apply.
+_SECRET_ENV_KEYS = (
+    "NASA_FIRMS_MAP_KEY",
+    "REDIS_URL",
+    "DATABASE_URL",
+)
+
+
+def known_env_secrets() -> List[str]:
+    """Return the current values of all secret-bearing environment variables.
+
+    Meant to be fed into :func:`redact_secrets` as extra literals so generic
+    ``except Exception`` boundaries scrub every known credential in one call.
+    """
+    return [os.getenv(k, "").strip() for k in _SECRET_ENV_KEYS]
 
 
 def mask_url(url: Optional[str]) -> str:

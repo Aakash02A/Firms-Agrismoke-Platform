@@ -23,7 +23,9 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 TEST_SCRIPTS = [
     ("Frontend DOM Element Verification", "test_dom_elements.py"),
+    ("PWA & Static Asset Serving", "test_pwa_assets.py"),
     ("SQLite Database Layer", "test_database.py"),
+    ("SQLite Production Readiness (WAL/backup/retention)", "test_sqlite_production.py"),
     ("NASA FIRMS Ingestion & Intelligence Layer", "test_nasa_firms.py"),
     ("Machine Learning & Physical Dispersion", "test_ml_model.py"),
     ("FastAPI Backend & API Endpoints", "test_backend_api.py"),

@@ -1,25 +1,175 @@
 """
 AgriSmoke AI - Database Access Layer
 Provides clean CRUD helpers and queries for the SQLite database.
+
+Production characteristics of the connection layer:
+  * one short-lived connection per operation, ALWAYS closed (no fd/lock leaks);
+  * WAL journal mode so API readers never block behind a FIRMS ingestion write;
+  * a real busy_timeout so transient write locks retry instead of 500-ing;
+  * foreign-key enforcement enabled per connection (SQLite defaults it OFF);
+  * idempotent schema/index/pragma validation at startup (ensure_ready).
 """
 
 import os
 import sqlite3
 import json
+import logging
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("agri_smoke.database")
 
 # Default to the repo-local SQLite file, but allow an env override (DB_PATH) so
 # PaaS/container deployments can point the database at a mounted, persistent
 # volume instead of the ephemeral app directory.
 _default_db = Path(__file__).resolve().parent.parent / "database" / "agri_smoke.db"
-DB_PATH = Path(os.getenv("DB_PATH", "").strip()).expanduser() if os.getenv("DB_PATH", "").strip() else _default_db
+_env_db = os.getenv("DB_PATH", "").strip()
+DB_PATH = Path(_env_db).expanduser() if _env_db else _default_db
 
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+def _get_int(key: str, default: int) -> int:
+    try:
+        return int(str(os.getenv(key, default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_bool(key: str, default: bool) -> bool:
+    val = os.getenv(key)
+    if val is None or not val.strip():
+        return default
+    return val.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# --- Tunables. Env-overridable so an operator can react to lock contention or
+# disk layout on a running deployment without shipping code.
+BUSY_TIMEOUT_MS: int = max(0, _get_int("SQLITE_BUSY_TIMEOUT_MS", 10000))
+WAL_ENABLED: bool = _get_bool("SQLITE_WAL", True)
+CACHE_SIZE_KB: int = _get_int("SQLITE_CACHE_SIZE_KB", -8000)   # negative => KiB/connection
+WAL_JOURNAL_SIZE_LIMIT: int = _get_int("SQLITE_WAL_JOURNAL_SIZE_LIMIT", 64 * 1024 * 1024)
+
+# Tables the API cannot function without. Verified (not created blindly) at startup.
+REQUIRED_TABLES = (
+    "monitoring_stations", "fire_hotspots", "weekly_trends", "district_fire_counts",
+    "grap_stages", "early_warning_alerts", "custom_thresholds", "fire_observations",
+    "fire_events", "districts", "data_sync_jobs", "data_provider_status", "alert_records",
+)
+
+# Performance indexes for the read paths that hit the DB on every dashboard poll.
+# Applied idempotently at startup so already-deployed DB files get them too.
+INDEX_DDL = (
+    # get_fire_observation_stats / get_live_fire_hotspots / get_live_district_fire_counts
+    # and the district join all filter on acq_date; without this they full-scan.
+    "CREATE INDEX IF NOT EXISTS idx_fire_obs_acq_date ON fire_observations(acq_date)",
+    # GET /api/v1/alerts?status=... ORDER BY created_at DESC
+    "CREATE INDEX IF NOT EXISTS idx_alert_records_status_created ON alert_records(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_alert_records_created ON alert_records(created_at)",
+    # GET /api/v1/geospatial/events ORDER BY total_frp DESC
+    "CREATE INDEX IF NOT EXISTS idx_fire_events_total_frp ON fire_events(total_frp)",
+    # provider telemetry reads, newest first
+    "CREATE INDEX IF NOT EXISTS idx_data_sync_jobs_started ON data_sync_jobs(started_at)",
+    # supports simulation_history reads and retention pruning
+    "CREATE INDEX IF NOT EXISTS idx_simulation_history_created ON simulation_history(created_at)",
+)
+
+# Resolved once per process: whether THIS database file is running in WAL.
+_wal_active: Optional[bool] = None
+_wal_lock = threading.Lock()
+
+
+def _open_raw() -> sqlite3.Connection:
+    """Create a configured SQLite connection. Prefer get_connection() instead.
+
+    Isolation is left at the sqlite3 default (deferred, implicit BEGIN before the
+    first DML) on purpose: the FIRMS ingestion helpers insert thousands of rows
+    in one loop and rely on that single implicit transaction for both atomicity
+    and speed. Switching to autocommit would make every row its own commit.
+    """
+    conn = sqlite3.connect(
+        DB_PATH,
+        # sqlite3's own busy timeout, so even PRAGMA setup waits out a lock.
+        timeout=BUSY_TIMEOUT_MS / 1000.0,
+    )
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    # synchronous=NORMAL is crash-safe under WAL and markedly faster than FULL;
+    # if WAL is unavailable we stay at the default (FULL) for durability.
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute(f"PRAGMA cache_size = {CACHE_SIZE_KB}")
+    if _wal_active:
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute(f"PRAGMA journal_size_limit = {WAL_JOURNAL_SIZE_LIMIT}")
     return conn
+
+
+def _try_enable_wal() -> bool:
+    """Flip the database file to WAL once per process and remember the result.
+
+    journal_mode is persistent in the DB header, so this is a one-time setup
+    cost rather than a per-connection pragma. A concurrent reader/writer can
+    make the switch return busy, which is why the outcome is only cached after a
+    confirmed change and otherwise re-checked on the next call.
+    """
+    global _wal_active
+    if not WAL_ENABLED:
+        _wal_active = False
+        return False
+    with _wal_lock:
+        if _wal_active is True:
+            return True
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=BUSY_TIMEOUT_MS / 1000.0)
+            try:
+                mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+                conn.execute(f"PRAGMA synchronous = {'NORMAL' if str(mode).lower() == 'wal' else 'FULL'}")
+                conn.execute(f"PRAGMA journal_size_limit = {WAL_JOURNAL_SIZE_LIMIT}")
+                conn.commit()
+            finally:
+                conn.close()
+            got_wal = str(mode).lower() == "wal"
+            if got_wal:
+                _wal_active = True
+                logger.info("SQLite journal_mode=WAL active on %s (concurrent readers no longer blocked by writers)", DB_PATH)
+            else:
+                logger.warning(
+                    "SQLite could not switch to WAL (journal_mode=%s) on %s; falling back to rollback journal. "
+                    "WAL needs a local filesystem that supports shared memory - not NFS/FUSE mounts.",
+                    mode, DB_PATH,
+                )
+            return got_wal
+        except sqlite3.Error as exc:
+            logger.warning("WAL setup skipped (%s); continuing with default journal mode", exc)
+            return False
+
+
+@contextmanager
+def get_connection():
+    """Context manager yielding a configured connection that is always closed.
+
+    ``with get_connection() as conn:`` commits on a clean exit and rolls back on
+    an exception - the same transaction semantics sqlite3.Connection provides -
+    but additionally releases the file handle. Without that release a failed
+    statement keeps the connection (and its locks) alive via the traceback
+    frames of the in-flight exception, which is how a single "database is
+    locked" error cascades into a stalled API.
+    """
+    _try_enable_wal()
+    conn = _open_raw()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except sqlite3.Error:  # pragma: no cover - already-failed handle
+            pass
+        raise
+    finally:
+        conn.close()
 
 def get_monitoring_stations() -> List[Dict[str, Any]]:
     with get_connection() as conn:
@@ -679,4 +829,474 @@ def update_alert_record_status(alert_id: str, new_status: str, notes: Optional[s
         """, (new_status, new_status, new_status, notes, alert_id))
         conn.commit()
         return cursor.rowcount > 0
+
+
+# ============================================================================
+# PRODUCTION LIFECYCLE: BOOTSTRAP, VALIDATION, BACKUP, RETENTION
+# ============================================================================
+#
+# The repo layout keeps schema.sql / init_db.py next to the DEFAULT database
+# file, while a deployment points DB_PATH at a mounted volume (e.g.
+# /var/data/agri_smoke.db). Resolve the DDL/seed sources from the CODE location,
+# never from DB_PATH's parent, or a volume-mounted production DB would look for
+# schema.sql inside the data directory and fail to start.
+
+_DB_ASSETS_DIR = Path(__file__).resolve().parent.parent / "database"
+SCHEMA_PATH = _DB_ASSETS_DIR / "schema.sql"
+INIT_SCRIPT_PATH = _DB_ASSETS_DIR / "init_db.py"
+
+
+def _backup_dir() -> Path:
+    """Backup destination: BACKUP_DIR env, else a backups/ folder beside the DB."""
+    override = os.getenv("BACKUP_DIR", "").strip()
+    return Path(override).expanduser() if override else DB_PATH.parent / "backups"
+
+
+def ensure_db_parent_dir() -> Path:
+    """Create the directory that must hold the database file.
+
+    Required for Render persistent disks: /var/data exists but is empty on first
+    deploy, and sqlite3 refuses to create a file in a missing directory
+    ("unable to open database file").
+    """
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return DB_PATH
+
+
+def list_tables(conn: sqlite3.Connection) -> List[str]:
+    return [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()]
+
+
+def missing_tables(conn: sqlite3.Connection) -> List[str]:
+    present = set(list_tables(conn))
+    return [t for t in REQUIRED_TABLES if t not in present]
+
+
+def apply_schema(conn: sqlite3.Connection) -> None:
+    """Create any missing tables from schema.sql (all DDL is IF NOT EXISTS)."""
+    if not SCHEMA_PATH.exists():
+        raise RuntimeError(f"schema.sql not found at {SCHEMA_PATH}")
+    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    conn.commit()
+
+
+def apply_indexes() -> int:
+    """Create the performance indexes. Idempotent, so safe on every boot."""
+    created = 0
+    with get_connection() as conn:
+        for ddl in INDEX_DDL:
+            conn.execute(ddl)
+            created += 1
+        conn.commit()
+    return created
+
+
+def verify_integrity() -> str:
+    """PRAGMA integrity_check. Returns 'ok' or the reported problem."""
+    with get_connection() as conn:
+        row = conn.execute("PRAGMA integrity_check").fetchone()
+    return str(row[0]) if row else "no-result"
+
+
+def _is_unseeded(conn: sqlite3.Connection) -> bool:
+    """True when reference data is absent, i.e. a brand-new volume-mounted DB."""
+    try:
+        stations = conn.execute("SELECT COUNT(*) FROM monitoring_stations").fetchone()[0]
+        grap = conn.execute("SELECT COUNT(*) FROM grap_stages").fetchone()[0]
+    except sqlite3.Error:
+        return True
+    return stations == 0 and grap == 0
+
+
+def _run_seeder() -> None:
+    """Seed reference data through the existing database/init_db.py.
+
+    Loaded by file path because database/ is a plain directory, not an importable
+    package, and backend/database.py is what 'import database' already resolves
+    to. One source of truth for seed rows, so bootstrap can never drift from the
+    initializer.
+    """
+    import importlib.util
+
+    if not INIT_SCRIPT_PATH.exists():
+        raise RuntimeError(f"init_db.py not found at {INIT_SCRIPT_PATH}")
+    spec = importlib.util.spec_from_file_location("agrismoke_init_db", INIT_SCRIPT_PATH)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise RuntimeError(f"cannot load initializer from {INIT_SCRIPT_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.init_database()
+
+
+def runtime_diagnostics() -> Dict[str, Any]:
+    """Snapshot of the live database configuration. Logged at startup and
+    asserted by the Phase 2 regression tests."""
+    info: Dict[str, Any] = {
+        "db_path": str(DB_PATH),
+        "exists": DB_PATH.exists(),
+        "size_bytes": DB_PATH.stat().st_size if DB_PATH.exists() else 0,
+        "busy_timeout_ms": BUSY_TIMEOUT_MS,
+        "wal_requested": WAL_ENABLED,
+        "sqlite_version": sqlite3.sqlite_version,
+    }
+    for sidecar in ("-wal", "-shm"):
+        p = Path(str(DB_PATH) + sidecar)
+        info[f"sidecar{sidecar}_present"] = p.exists()
+    if DB_PATH.exists():
+        with get_connection() as conn:
+            info["journal_mode"] = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            info["synchronous"] = conn.execute("PRAGMA synchronous").fetchone()[0]
+            info["foreign_keys"] = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            info["page_size"] = conn.execute("PRAGMA page_size").fetchone()[0]
+            info["tables"] = sorted(list_tables(conn))
+            info["missing_tables"] = missing_tables(conn)
+            info["indexes"] = [
+                r["name"] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
+            ]
+    return info
+
+
+def ensure_ready(seed_if_empty: bool = True) -> Dict[str, Any]:
+    """Validate (and if necessary build) the production database. Safe to call
+    on every boot; never modifies existing rows.
+
+    Order matters: create the directory, then the file/schema, then indexes,
+    then WAL (a journal-mode change must not race table creation), then optional
+    seeding of a brand-new volume, and finally an integrity check.
+
+    Raises only when the database is genuinely unusable (missing/unwritable
+    directory, missing schema.sql, corrupt file) so a broken deployment fails
+    fast and loudly instead of returning 500s per request.
+    """
+    ensure_db_parent_dir()
+    created_new = not DB_PATH.exists()
+
+    with get_connection() as conn:
+        apply_schema(conn)
+
+    apply_indexes()
+    _try_enable_wal()
+
+    seeded = False
+    if seed_if_empty:
+        with get_connection() as conn:
+            needs_seed = created_new or _is_unseeded(conn)
+        if needs_seed:
+            logger.warning("Database at %s has no reference data - seeding via %s", DB_PATH, INIT_SCRIPT_PATH)
+            _run_seeder()
+            apply_indexes()
+            seeded = True
+
+    with get_connection() as conn:
+        still_missing = missing_tables(conn)
+    if still_missing:
+        raise RuntimeError(f"Database validation failed - missing tables after bootstrap: {still_missing}")
+
+    integrity = verify_integrity()
+    if integrity != "ok":
+        raise RuntimeError(f"Database integrity check failed: {integrity}")
+
+    diag = runtime_diagnostics()
+    diag["created_new_file"] = created_new
+    diag["seeded"] = seeded
+    logger.info(
+        "SQLite ready: %s (journal=%s, busy_timeout=%sms, foreign_keys=%s, tables=%d, size=%.1f MB)",
+        DB_PATH, diag.get("journal_mode"), BUSY_TIMEOUT_MS, diag.get("foreign_keys"),
+        len(diag.get("tables", [])), diag.get("size_bytes", 0) / 1048576.0,
+    )
+    return diag
+
+
+# ---------------------------------------------------------------------------
+# Online backup / restore
+# ---------------------------------------------------------------------------
+#
+# A plain file copy of a live SQLite database is NOT safe: with WAL the newest
+# committed rows may still be sitting in the -wal sidecar, and copying mid-write
+# can capture a torn page. sqlite3's backup API reads through the database
+# engine, so it produces a consistent snapshot while ingestion and API traffic
+# continue.
+
+_BACKUPABLE_TABLES = (
+    "monitoring_stations", "fire_observations", "fire_events", "alert_records",
+    "data_sync_jobs", "simulation_history", "districts",
+)
+
+
+def _connect_for_admin(path: Path, readonly: bool = False) -> sqlite3.Connection:
+    # The URI must be parsed (uri=True) only in the readonly case, where the
+    # path is a "file:...?mode=ro" URI; otherwise the whole string would be
+    # treated as a literal filename and the open would fail.
+    conn_str = f"file:{Path(path).as_posix()}?mode=ro" if readonly else str(path)
+    conn = sqlite3.connect(conn_str, uri=readonly, timeout=BUSY_TIMEOUT_MS / 1000.0)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def backup_database(dest_dir: Optional[str] = None, label: Optional[str] = None) -> Dict[str, Any]:
+    """Take a consistent online snapshot of the database.
+
+    Returns metadata including the destination path, size, integrity verdict and
+    per-table row counts, so an operator (or a scheduled job) can tell that the
+    backup actually captured data.
+    """
+    if not DB_PATH.exists():
+        raise RuntimeError(f"Nothing to back up - database file {DB_PATH} does not exist")
+
+    target_dir = Path(dest_dir).expanduser() if dest_dir else _backup_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    tag = f"-{label}" if label else ""
+    dest_path = target_dir / f"{DB_PATH.stem}{tag}-{stamp}.db"
+
+    source = _connect_for_admin(DB_PATH)
+    try:
+        destination = _connect_for_admin(dest_path)
+        try:
+            source.backup(destination)          # instance = source, arg = target
+            integrity = destination.execute("PRAGMA integrity_check").fetchone()[0]
+            counts = {}
+            for table in _BACKUPABLE_TABLES:
+                try:
+                    counts[table] = destination.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                except sqlite3.Error:
+                    counts[table] = None
+            destination.commit()
+        finally:
+            destination.close()
+    finally:
+        source.close()
+
+    if str(integrity) != "ok":
+        dest_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Backup failed integrity check and was discarded: {integrity}")
+
+    result = {
+        "backup_path": str(dest_path),
+        "size_bytes": dest_path.stat().st_size,
+        "integrity": str(integrity),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_db": str(DB_PATH),
+        "table_counts": counts,
+        "total_rows": sum(v for v in counts.values() if isinstance(v, int)),
+    }
+    logger.info("Backup written to %s (%d rows, %.1f MB)", dest_path, result["total_rows"],
+                result["size_bytes"] / 1048576.0)
+    return result
+
+
+def restore_database(backup_path: str, target_path: Optional[str] = None, confirm: bool = False) -> Dict[str, Any]:
+    """Replace a database file with a verified backup.
+
+    Deliberately guarded: the destination is snapshotted first, so a restore can
+    always be rolled back, and an existing target requires confirm=True. The copy
+    goes through the backup API inside a transaction rather than a file overwrite,
+    so a crash mid-restore cannot leave a half-written database.
+    """
+    source_path = Path(backup_path).expanduser()
+    if not source_path.exists():
+        raise FileNotFoundError(f"Backup not found: {source_path}")
+
+    target = Path(target_path).expanduser() if target_path else DB_PATH
+    if target.exists() and not confirm:
+        raise RuntimeError(
+            f"Refusing to overwrite existing database {target} without confirm=True. "
+            f"Stop the app first (or use a maintenance window), then re-run."
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    preflight = None
+    if target.exists():
+        preflight = backup_database(dest_dir=str(target.parent / "pre-restore"), label="pre-restore")
+
+    # Validate the backup before touching the live file.
+    check = _connect_for_admin(source_path, readonly=True)
+    try:
+        integrity = check.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        check.close()
+    if str(integrity) != "ok":
+        raise RuntimeError(f"Backup failed integrity check, restore aborted: {source_path} ({integrity})")
+
+    source = _connect_for_admin(source_path)
+    try:
+        destination = _connect_for_admin(target)
+        try:
+            source.backup(destination)
+            destination.commit()
+            restored_rows = destination.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
+            post_integrity = destination.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            destination.close()
+    finally:
+        source.close()
+
+    if str(post_integrity) != "ok":
+        raise RuntimeError(f"Restored database reports integrity problem: {post_integrity}")
+
+    result = {
+        "restored_from": str(source_path),
+        "target": str(target),
+        "tables": restored_rows,
+        "integrity": str(post_integrity),
+        "pre_restore_snapshot": preflight["backup_path"] if preflight else None,
+    }
+    logger.info("Restored %s from %s", target, source_path)
+    return result
+
+
+def list_backups(dest_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Newest-first inventory of backup snapshots, newest first."""
+    target_dir = Path(dest_dir).expanduser() if dest_dir else _backup_dir()
+    if not target_dir.exists():
+        return []
+    items = []
+    for p in sorted(target_dir.glob(f"{DB_PATH.stem}-*.db"), reverse=True):
+        items.append({"path": str(p), "size_bytes": p.stat().st_size,
+                      "modified_at": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat()})
+    return items
+
+
+def prune_backups(keep: int, dest_dir: Optional[str] = None) -> List[str]:
+    """Delete all but the newest `keep` snapshots. keep <= 0 is a no-op.
+
+    Only files matching the '<dbname>-*.db' pattern inside the backup directory
+    are ever considered - the live database is never a candidate.
+    """
+    if keep <= 0:
+        return []
+    backups = list_backups(dest_dir)
+    removed = []
+    for entry in backups[keep:]:
+        p = Path(entry["path"])
+        try:
+            target_dir = Path(dest_dir).expanduser() if dest_dir else _backup_dir()
+            if target_dir not in p.parents or not p.name.startswith(f"{DB_PATH.stem}-"):
+                continue
+            p.unlink()
+            removed.append(str(p))
+        except OSError as exc:  # pragma: no cover - permission/disk edge
+            logger.warning("Could not prune backup %s: %s", p, exc)
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# Retention / space management
+# ---------------------------------------------------------------------------
+#
+# fire_observations grows with every 3-hourly ingestion (thousands of rows per
+# sync on a multi-sensor setup) and simulation_history grows with every public
+# /api/predict call. Both are append-only, so without a retention policy the disk
+# fills up and SQLite starts failing on the mount.
+
+#: table -> (timestamp column, default retention days). Whitelisted so the
+#: pruning helper can never be steered by caller-supplied identifiers.
+RETENTION_TARGETS: Dict[str, tuple] = {
+    "fire_observations": ("acq_date", 180),
+    "fire_events": ("start_time", 180),
+    "simulation_history": ("created_at", 90),
+    "data_sync_jobs": ("started_at", 90),
+}
+
+
+def prune_aged_data(table: str, retention_days: int, apply_changes: bool = False) -> Dict[str, Any]:
+    """Count (and optionally delete) rows older than the retention window.
+
+    Defaults to a dry run: callers must pass apply_changes=True to delete, and
+    the recommendation is to take a backup first.
+    """
+    if table not in RETENTION_TARGETS:
+        raise ValueError(f"table must be one of {sorted(RETENTION_TARGETS)}")
+    column, default_days = RETENTION_TARGETS[table]
+    days = int(retention_days or default_days)
+    if days <= 0:
+        raise ValueError("retention_days must be a positive number of days")
+
+    # Parameterised date arithmetic; the identifier comes from the whitelist above.
+    sql = f'DELETE FROM "{table}" WHERE "{column}" < date(\'now\', ?)'
+    count_sql = f'SELECT COUNT(*) FROM "{table}" WHERE "{column}" < date(\'now\', ?)'
+    cutoff = f"-{days} days"
+    with get_connection() as conn:
+        stale = conn.execute(count_sql, (cutoff,)).fetchone()[0]
+        total = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+        deleted = 0
+        if stale and apply_changes:
+            conn.execute(sql, (cutoff,))
+            deleted = conn.execute("SELECT changes()").fetchone()[0]
+    return {
+        "table": table,
+        "column": column,
+        "retention_days": days,
+        "rows_total": total,
+        "rows_older_than_cutoff": stale,
+        "rows_deleted": deleted,
+        "applied": bool(apply_changes),
+    }
+
+
+def storage_report() -> Dict[str, Any]:
+    """Sizes and row counts per table, plus reclaimable pages."""
+    with get_connection() as conn:
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+        freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+        tables = {}
+        for name in list_tables(conn):
+            try:
+                tables[name] = conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+            except sqlite3.Error:
+                tables[name] = None
+    return {
+        "db_path": str(DB_PATH),
+        "file_bytes": DB_PATH.stat().st_size if DB_PATH.exists() else 0,
+        "page_size": page_size,
+        "page_count": page_count,
+        "reclaimable_bytes": int(freelist) * int(page_size),
+        "table_rows": tables,
+    }
+
+
+def checkpoint_and_optimize(mode: str = "TRUNCATE") -> Dict[str, Any]:
+    """Fold the WAL back into the main file and refresh planner statistics.
+
+    TRUNCATE also shrinks the -wal sidecar, which is what keeps a bounded disk
+    footprint on a small Render volume after a large ingestion.
+    """
+    if mode.upper() not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+        raise ValueError("mode must be PASSIVE, FULL, RESTART or TRUNCATE")
+    with get_connection() as conn:
+        row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+        conn.execute("PRAGMA optimize")
+        conn.commit()
+    return {
+        "mode": mode.upper(),
+        # (busy, wal pages before checkpoint, pages moved) - busy=1 means the
+        # checkpoint could not complete because a reader held the log open.
+        "busy": int(row[0]) if row else None,
+        "wal_pages": int(row[1]) if row and row[1] is not None else None,
+        "checkpointed_pages": int(row[2]) if row and row[2] is not None else None,
+    }
+
+
+def run_vacuum(reclaim_space: bool = True) -> Dict[str, Any]:
+    """Compact the database file. VACUUM needs an exclusive, transaction-free
+    connection, so it runs outside get_connection() and should be done in a
+    maintenance window rather than while the API is serving."""
+    before = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    conn = _connect_for_admin(DB_PATH)
+    try:
+        if reclaim_space:
+            conn.isolation_level = None      # autocommit: VACUUM cannot run in a transaction
+            conn.execute("VACUUM")
+    finally:
+        conn.close()
+    after = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    return {"before_bytes": before, "after_bytes": after, "reclaimed_bytes": max(0, before - after)}
+
+
 

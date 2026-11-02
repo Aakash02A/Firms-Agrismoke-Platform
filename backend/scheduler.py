@@ -10,6 +10,11 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 
+try:
+    from backend.security import known_env_secrets, safe_error
+except ImportError:  # pragma: no cover - supports flat/direct imports
+    from security import known_env_secrets, safe_error
+
 logger = logging.getLogger("agri_smoke.scheduler")
 
 
@@ -67,7 +72,9 @@ class IngestionScheduler:
                     self.next_weather_sync = (now_dt + timedelta(seconds=self.weather_interval)).isoformat()
                     last_weather_time = now
                 except Exception as e:
-                    self.last_error = f"Weather update error: {str(e)}"
+                    # last_error is surfaced by GET /api/v1/scheduler/status; scrub
+                    # credentials (MAP_KEY, Redis/DB passwords echoed in URLs) first.
+                    self.last_error = f"Weather update error: {safe_error(e, known_env_secrets())}"
                     logger.warning(self.last_error)
 
             # 2. NASA FIRMS Ingestion
@@ -88,7 +95,7 @@ class IngestionScheduler:
                         self.next_firms_sync = (now_dt + timedelta(seconds=self.firms_interval)).isoformat()
                         last_firms_time = now
                 except Exception as e:
-                    self.last_error = f"FIRMS sync error: {str(e)}"
+                    self.last_error = f"FIRMS sync error: {safe_error(e, known_env_secrets())}"
                     logger.warning(self.last_error)
 
             # Sleep briefly in small increments so stop() responds quickly

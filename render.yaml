@@ -15,7 +15,7 @@ services:
     runtime: docker
     dockerfilePath: ./deploy/Dockerfile
     dockerContext: .
-    plan: starter                       # bump to standard for persistent disks
+    plan: standard                      # REQUIRED: Render persistent disks are unavailable on the free/starter tiers
     region: oregon                      # change to your nearest Render region
     healthCheckPath: /api/health
     envVars:
@@ -25,7 +25,9 @@ services:
         value: 0.0.0.0
       - key: PORT
         value: "10000"                  # Render routes external 443 -> this port
-      # Render-managed persistent volume so SQLite survives restarts.
+      # Render-managed persistent volume so SQLite survives restarts/redeploys.
+      # The mount path MUST be this env var's directory (backend/database.py
+      # creates the parent dir and seeds a fresh volume at startup via ensure_ready()).
       - key: DB_PATH
         value: /var/data/agri_smoke.db
       - key: NASA_FIRMS_MAP_KEY

@@ -5,11 +5,20 @@ SHA-256 deduplication, spatiotemporal clustering, and SQLite persistence.
 """
 
 import unittest
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Phase 2 isolation: point backend.database at a throwaway file BEFORE it is
+# imported (DB_PATH is read at import time) so ingestion/dedup tests never touch
+# the production database/agri_smoke.db. setUpClass seeds this temp DB via
+# ensure_ready() so district joins and provider-status reads behave identically.
+_TMP_DIR = Path(tempfile.mkdtemp(prefix="agrismoke_firms_test_"))
+os.environ["DB_PATH"] = str(_TMP_DIR / "agri_firms_test.db")
 
 from backend.integrations.nasa_firms.config import FirmsConfig, DEFAULT_REGIONS
 from backend.integrations.nasa_firms.parser import parse_firms_csv, FirmsParseError
@@ -38,6 +47,13 @@ SAMPLE_VIIRS_CSV = """latitude,longitude,bright_ti4,scan,track,acq_date,acq_time
 
 
 class TestNasaFirmsIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Build + seed the isolated temp DB exactly like production startup does,
+        # so get_district_fire_summary()'s join on districts and provider-status
+        # reads have their reference rows without touching the real database.
+        database.ensure_ready()
+
     def setUp(self):
         self.config = FirmsConfig()
         self.service = FirmsIngestionService(self.config)

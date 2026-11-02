@@ -1,26 +1,44 @@
 """
 Diagnostic Test: Database Layer Verification
-Tests SQLite connection, schema integrity, seeded records, and CRUD functions.
+Tests SQLite schema integrity, seeded records, and CRUD functions.
+
+Phase 2 hardening: this suite now runs against an ISOLATED temporary database
+built by database.ensure_ready() (schema + indexes + WAL + seed), so it never
+mutates the production database/agri_smoke.db. get_connection() is used as the
+context manager it now is (commit-on-success / rollback-on-error / always-close).
 """
 
+import os
 import sys
-import sqlite3
+import tempfile
+import shutil
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# Point backend.database at a throwaway file BEFORE import (DB_PATH is read at
+# import time) so every assertion below touches only this temp database.
+_TMP = Path(tempfile.mkdtemp(prefix="agrismoke_db_test_"))
+os.environ["DB_PATH"] = str(_TMP / "agri_smoke_test.db")
+
 sys.path.insert(0, str(ROOT_DIR / "backend"))
-import database as db
+import database as db  # noqa: E402
+
 
 def test_database_layer():
-    print("=== Test 2: Database Layer Verification ===")
-    
-    # 1. Connect to SQLite
-    conn = db.get_connection()
-    cursor = conn.cursor()
-    
-    # Verify tables
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = {row[0] for row in cursor.fetchall()}
+    print("=== Test 2: Database Layer Verification (isolated temp DB) ===")
+    assert str(db.DB_PATH).startswith(str(_TMP)), f"Isolation broken: DB_PATH={db.DB_PATH}"
+
+    # 0. Bootstrap a fresh DB the same way production startup does.
+    diag = db.ensure_ready()
+    assert diag["exists"] and not diag["missing_tables"], f"Bootstrap incomplete: {diag}"
+    print(f"[PASS] ensure_ready() bootstrapped isolated DB ({len(diag['tables'])} tables, journal_mode={diag['journal_mode']}).")
+
+    # 1. Verify tables via the context-managed connection.
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
     expected_tables = {
         "monitoring_stations", "fire_hotspots", "hourly_forecasts",
         "weekly_trends", "district_fire_counts", "grap_stages",
@@ -79,8 +97,8 @@ def test_database_layer():
         "mitigationSavings": {"aqiDrop": 50}
     }
     db.save_simulation_run(test_params, test_pred)
-    cursor.execute("SELECT * FROM simulation_history ORDER BY id DESC LIMIT 1")
-    last_run = cursor.fetchone()
+    with db.get_connection() as conn:
+        last_run = conn.execute("SELECT * FROM simulation_history ORDER BY id DESC LIMIT 1").fetchone()
     assert last_run["fire_count"] == 2200
     assert last_run["predicted_aqi"] == 395
     print("[PASS] Simulation record successfully persisted and retrieved.")
@@ -93,9 +111,11 @@ def test_database_layer():
     db.update_custom_thresholds(400, 2000)
     print("[PASS] Custom thresholds update and retrieval verified.")
 
-    conn.close()
     print("=== Database Layer: ALL TESTS PASSED! ===")
 
-if __name__ == "__main__":
-    test_database_layer()
 
+if __name__ == "__main__":
+    try:
+        test_database_layer()
+    finally:
+        shutil.rmtree(_TMP, ignore_errors=True)

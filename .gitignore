@@ -46,6 +46,15 @@ id_ed25519.pub
 *.sqlite3
 *.db3
 database/*.db
+# SQLite WAL sidecars + SHM index are runtime artifacts and must never be
+# committed alongside (or instead of) the .db (Phase 2 enables journal_mode=WAL).
+*.db-wal
+*.db-shm
+*.db-journal
+# Online backups / retention snapshots produced by database.backup_database().
+backups/
+database/backups/
+**/pre-restore/
 *.dump
 *.sql.gz
 

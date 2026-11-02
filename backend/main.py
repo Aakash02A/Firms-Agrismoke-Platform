@@ -9,6 +9,7 @@ import io
 import csv
 import time
 import logging
+import traceback
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -46,6 +47,7 @@ from app_config import config
 from backend.integrations.weather import weather_service, LiveWeatherSnapshot
 from backend.integrations.air_quality import air_quality_service
 from backend.scheduler import scheduler
+from backend.security import mask_url, redact_secrets, known_env_secrets
 from backend.policy_simulator import (
     PolicySimulationRequest,
     PolicySimulationResult,
@@ -163,9 +165,21 @@ async def security_and_guard_middleware(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    """Log the real traceback server-side; never leak internals to clients in prod."""
-    logger.exception("Unhandled error on %s %s: %s", request.method, request.url.path, exc)
-    detail = "Internal server error" if config.is_production else f"{type(exc).__name__}: {exc}"
+    """Log a scrubbed traceback server-side; never leak internals or credentials.
+
+    The rendered traceback (which ends with the raw ``ExcType: message`` line and
+    can echo a credential-bearing FIRMS URL / Redis password) is redacted before
+    it reaches the log, and the request URL is masked. Clients only ever receive
+    the exception class name in development and a generic message in production.
+    """
+    secrets = known_env_secrets()
+    safe_url = redact_secrets(mask_url(str(request.url)), secrets)
+    raw_tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error(
+        "Unhandled error on %s %s\n%s",
+        request.method, safe_url, redact_secrets(raw_tb, secrets),
+    )
+    detail = "Internal server error" if config.is_production else f"{type(exc).__name__}: {redact_secrets(str(exc), secrets)}"
     return JSONResponse(status_code=500, content={"error": detail})
 
 # ----------------- Request / Response Models -----------------
@@ -755,7 +769,21 @@ def get_alert_channels_and_logs(limit: int = 20):
 
 @app.on_event("startup")
 def startup_event():
-    """Initialize background ingestion scheduler on server boot."""
+    """Validate/bootstrap the SQLite database, then start the ingestion scheduler.
+
+    ensure_ready() creates the DB parent directory (Render persistent disks start
+    empty), applies schema + indexes idempotently, enables WAL, seeds a brand-new
+    volume, and runs an integrity check. It raises only when the database is
+    genuinely unusable, so a misconfigured deployment fails fast and loudly here
+    instead of returning 500s on every request.
+    """
+    try:
+        diag = db.ensure_ready()
+        logger.info("Database bootstrap complete: %d tables, journal_mode=%s",
+                    len(diag.get("tables", [])), diag.get("journal_mode"))
+    except Exception as exc:
+        logger.error("Database bootstrap failed: %s", redact_secrets(str(exc), known_env_secrets()))
+        raise
     scheduler.start()
 
 
@@ -770,11 +798,46 @@ if FRONTEND_DIR.exists():
     app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
     app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
 
+    # no-cache so HTML edits (and the SW cache-version bump) take effect on the
+    # next reload instead of being served from a stale browser/service-worker
+    # cache. The service worker in particular must never be served from an
+    # aggressive cache, or a deployment update would not propagate to clients.
+    _NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+
+    def _serve_frontend_file(name: str, media_type: str = None) -> FileResponse:
+        return FileResponse(FRONTEND_DIR / name, media_type=media_type, headers=_NO_CACHE)
+
     @app.get("/")
     def serve_frontend():
-        # no-cache so HTML edits (and the SW cache-version bump) take effect on the
-        # next reload instead of being served from a stale browser/service-worker cache.
-        return FileResponse(FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
+        return _serve_frontend_file("index.html", media_type="text/html")
+
+    # The SW precaches 'index.html' and the page references manifest.json /
+    # service-worker.js as root-relative URLs, so those exact paths must resolve
+    # (they 404'd when only '/', '/css' and '/js' were routed). Serving targeted
+    # files - not mounting the whole tree - keeps stray files (e.g. README.md)
+    # from being exposed in production.
+    @app.get("/index.html")
+    def serve_index():
+        return _serve_frontend_file("index.html", media_type="text/html")
+
+    @app.get("/manifest.json")
+    def serve_manifest():
+        return _serve_frontend_file("manifest.json", media_type="application/manifest+json")
+
+    @app.get("/service-worker.js")
+    def serve_service_worker():
+        return _serve_frontend_file("service-worker.js", media_type="application/javascript")
+
+    @app.get("/favicon.ico")
+    def serve_favicon():
+        # Browsers auto-request /favicon.ico; serve the brand SVG inline instead
+        # of letting it 404 and pollute logs. No separate asset file introduced.
+        svg = (
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+            "<text y='.9em' font-size='90'>🌱</text></svg>"
+        )
+        return Response(content=svg, media_type="image/svg+xml", headers=_NO_CACHE)
+
 
 # ----------------- Run Standalone -----------------
 if __name__ == "__main__":
