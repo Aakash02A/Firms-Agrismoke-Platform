@@ -26,6 +26,7 @@ TEST_SCRIPTS = [
     ("PWA & Static Asset Serving", "test_pwa_assets.py"),
     ("SQLite Database Layer", "test_database.py"),
     ("SQLite Production Readiness (WAL/backup/retention)", "test_sqlite_production.py"),
+    ("Scheduler Ingestion & Backup Automation", "test_scheduler_maintenance.py"),
     ("NASA FIRMS Ingestion & Intelligence Layer", "test_nasa_firms.py"),
     ("Machine Learning & Physical Dispersion", "test_ml_model.py"),
     ("FastAPI Backend & API Endpoints", "test_backend_api.py"),

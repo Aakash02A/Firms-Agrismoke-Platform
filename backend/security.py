@@ -23,10 +23,17 @@ _FIRMS_KEY_PATH = re.compile(r"(/api/(?:area|data_availability)/csv/)[^/]+/")
 # Environment variables whose values are secrets. Anything derived from them
 # (connection strings, MAP keys, tokens) must never reach logs, the database,
 # or an HTTP response. Checked at call time so tests and dotenv reloads apply.
+# The off-site backup targets (S3-compatible object storage) inject long-lived
+# cloud credentials, so their secret keys are redacted from backup failure logs
+# and the scheduler telemetry the same way as the data-provider secrets.
 _SECRET_ENV_KEYS = (
     "NASA_FIRMS_MAP_KEY",
     "REDIS_URL",
     "DATABASE_URL",
+    "AWS_SECRET_ACCESS_KEY",
+    "OFFSITE_S3_SECRET_KEY",
+    "BACKUP_S3_SECRET_KEY",
+    "BACKUP_ENCRYPTION_KEY",
 )
 
 

@@ -13,6 +13,7 @@ Production characteristics of the connection layer:
 import os
 import sqlite3
 import json
+import shutil
 import logging
 import threading
 from contextlib import contextmanager
@@ -1297,6 +1298,232 @@ def run_vacuum(reclaim_space: bool = True) -> Dict[str, Any]:
         conn.close()
     after = DB_PATH.stat().st_size if DB_PATH.exists() else 0
     return {"before_bytes": before, "after_bytes": after, "reclaimed_bytes": max(0, before - after)}
+
+
+# ---------------------------------------------------------------------------
+# Scheduled maintenance: disk monitoring, off-site distribution, and the
+# backup / retention cycles that the background MaintenanceScheduler drives.
+# These are plain functions (safe to call directly), and every value is read
+# from the environment AT CALL TIME so a running deployment can be re-tuned
+# and tests can patch os.environ without re-importing this module.
+# ---------------------------------------------------------------------------
+
+#: Where completed snapshots are ALSO copied so a lost disk is recoverable.
+#:   none     - local snapshot only (NOT disaster recovery on its own)
+#:   directory- copy to OFFSITE_BACKUP_DIR (a second mounted volume/path)
+#:   s3       - upload to an S3-compatible bucket (R2/B2/MinIO/S3) via boto3
+OFFSITE_BACKEND_ENV = "OFFSITE_BACKEND"
+
+#: Env key -> default retention days for each whitelisted table. Env override
+#: keys are the upper-cased form, e.g. FIRE_OBS_RETENTION_DAYS.
+_RETENTION_ENV_KEYS = {
+    "fire_observations": ("FIRE_OBS_RETENTION_DAYS", 180),
+    "fire_events": ("FIRE_EVENTS_RETENTION_DAYS", 180),
+    "simulation_history": ("SIM_HISTORY_RETENTION_DAYS", 90),
+    "data_sync_jobs": ("SYNC_JOBS_RETENTION_DAYS", 90),
+}
+
+
+def retention_days_for(table: str) -> int:
+    """Configurable per-table retention window (env-overridable)."""
+    env_key, default = _RETENTION_ENV_KEYS.get(table, (None, RETENTION_TARGETS.get(table, ("", 180))[1]))
+    if env_key:
+        return max(1, _get_int(env_key, default))
+    return max(1, default)
+
+
+def backup_retention_keep() -> int:
+    """Number of local snapshots to retain (oldest pruned beyond this)."""
+    return _get_int("BACKUP_RETENTION_KEEP", 10)
+
+
+def min_free_mb() -> int:
+    """Free-space floor the disk must clear before maintenance is considered safe."""
+    return max(0, _get_int("SQLITE_MIN_FREE_MB", 512))
+
+
+def offsite_configured() -> bool:
+    """True when a real off-site destination is selected (not 'none')."""
+    return os.getenv(OFFSITE_BACKEND_ENV, "none").strip().lower() in {"directory", "s3"}
+
+
+def check_disk_space(path: Optional[str] = None) -> Dict[str, Any]:
+    """Free/total space for the volume holding the database (or a given path).
+
+    Never raises: if the resolved directory does not exist yet it reports the
+    nearest existing ancestor so a pre-bootstrap call still yields a usable
+    reading.
+    """
+    target = Path(path).expanduser() if path else DB_PATH.parent
+    probe = target
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    try:
+        usage = shutil.disk_usage(str(probe))
+    except OSError as exc:  # pragma: no cover - exotic filesystems
+        logger.warning("Could not read disk usage for %s: %s", probe, exc)
+        return {"path": str(target), "available": False, "ok": True,
+                "free_mb": None, "min_free_mb": min_free_mb(), "error": str(exc)}
+    free_mb = usage.free / 1048576.0
+    floor = min_free_mb()
+    return {
+        "path": str(target),
+        "available": True,
+        "free_bytes": usage.free,
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
+        "free_mb": round(free_mb, 1),
+        "min_free_mb": floor,
+        "ok": free_mb >= floor,
+    }
+
+
+def _upload_backup_to_s3(src: Path) -> Dict[str, Any]:
+    """Optional S3-compatible upload. boto3 is imported lazily so the base app
+    has no hard dependency on it (off-site S3 is opt-in)."""
+    bucket = os.getenv("OFFSITE_S3_BUCKET", "").strip()
+    if not bucket:
+        return {"backend": "s3", "delivered": False, "reason": "OFFSITE_S3_BUCKET not set"}
+    try:
+        import boto3
+    except ImportError:
+        return {"backend": "s3", "delivered": False,
+                "reason": "boto3 not installed; run `pip install boto3` to enable S3 off-site"}
+    endpoint = os.getenv("OFFSITE_S3_ENDPOINT", "").strip() or None
+    region = os.getenv("OFFSITE_S3_REGION", "").strip() or None
+    access_key = os.getenv("OFFSITE_S3_ACCESS_KEY", "").strip() or os.getenv("AWS_ACCESS_KEY_ID", "").strip() or None
+    secret_key = os.getenv("OFFSITE_S3_SECRET_KEY", "").strip() or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip() or None
+    prefix = os.getenv("OFFSITE_S3_PREFIX", "backups").strip("/") or "backups"
+    key = f"{prefix}/{src.name}"
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name=region,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+    )
+    client.upload_file(str(src), bucket, key)
+    return {"backend": "s3", "delivered": True, "bucket": bucket, "key": key}
+
+
+def distribute_backup_offsite(backup_path: str) -> Dict[str, Any]:
+    """Copy a completed snapshot to the configured off-site destination.
+
+    A local snapshot on the same persistent disk is NOT disaster recovery - if
+    the volume dies the backup dies with it. This pushes a copy somewhere
+    independent. Integrity is re-verified after a directory copy so a torn
+    transfer is caught, never trusted.
+    """
+    backend = os.getenv(OFFSITE_BACKEND_ENV, "none").strip().lower()
+    src = Path(backup_path)
+    if backend in ("", "none"):
+        return {"backend": backend or "none", "delivered": False, "reason": "off-site disabled"}
+    if not src.exists():
+        return {"backend": backend, "delivered": False, "reason": f"snapshot missing: {src}"}
+
+    if backend == "directory":
+        dest_dir = os.getenv("OFFSITE_BACKUP_DIR", "").strip()
+        if not dest_dir:
+            return {"backend": "directory", "delivered": False, "reason": "OFFSITE_BACKUP_DIR not set"}
+        dest = Path(dest_dir).expanduser()
+        try:
+            if dest.resolve() == src.parent.resolve():
+                return {"backend": "directory", "delivered": False,
+                        "reason": "OFFSITE_BACKUP_DIR equals the backup dir - that is not off-site"}
+        except OSError:
+            pass
+        dest.mkdir(parents=True, exist_ok=True)
+        target = dest / src.name
+        shutil.copy2(src, target)
+        check = _connect_for_admin(target, readonly=True)
+        try:
+            integrity = str(check.execute("PRAGMA integrity_check").fetchone()[0])
+        finally:
+            check.close()
+        if integrity != "ok":
+            target.unlink(missing_ok=True)
+            return {"backend": "directory", "delivered": False, "reason": f"off-site copy failed integrity: {integrity}"}
+        return {"backend": "directory", "delivered": True, "path": str(target), "integrity": integrity}
+
+    if backend == "s3":
+        return _upload_backup_to_s3(src)
+
+    return {"backend": backend, "delivered": False, "reason": f"unknown OFFSITE_BACKEND '{backend}'"}
+
+
+def run_backup_cycle(label: Optional[str] = None, push_offsite: bool = True,
+                     prune_old_snapshots: bool = True) -> Dict[str, Any]:
+    """One full maintenance backup: monitor disk, snapshot (integrity-checked),
+    prune local snapshots to the retention count, then push an off-site copy.
+
+    backup_database() already runs PRAGMA integrity_check on the destination and
+    discards a bad snapshot, so a corrupt backup is never reported as success.
+    Raises on snapshot failure so the caller (scheduler) logs it redacted;
+    off-site delivery failure is reported in the result, not raised, because the
+    local snapshot is still valid and should not be lost over a network blip.
+    """
+    report: Dict[str, Any] = {"ok": True, "steps": []}
+
+    disk = check_disk_space()
+    report["disk"] = disk
+    if disk.get("available") and not disk.get("ok"):
+        logger.warning(
+            "Low disk space before backup: %s MB free (minimum %s MB) on %s",
+            disk.get("free_mb"), disk.get("min_free_mb"), disk.get("path"),
+        )
+
+    info = backup_database(label=label)          # integrity verified inside
+    report["backup"] = info
+    report["steps"].append("snapshot")
+
+    if prune_old_snapshots:
+        keep = backup_retention_keep()
+        if keep > 0:
+            report["pruned"] = prune_backups(keep=keep)
+            report["steps"].append("prune")
+
+    if push_offsite:
+        off = distribute_backup_offsite(info["backup_path"])
+        report["offsite"] = off
+        report["steps"].append("offsite")
+        if offsite_configured() and not off.get("delivered"):
+            report["ok"] = False
+            logger.error("Backup snapshot OK but off-site delivery failed: %s", off.get("reason"))
+
+    return report
+
+
+def run_retention_cycle(apply_changes: bool = False, backup_first: bool = True,
+                        tables: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Prune aged rows from the whitelisted historical tables.
+
+    Safety: when actually deleting (apply_changes=True) a fresh backup is taken
+    first (backup_first) so destructive maintenance is always recoverable. Only
+    tables present in RETENTION_TARGETS are eligible - the whitelist makes it
+    impossible to steer the DELETE at an operational table by accident. Runs on
+    the single maintenance thread and through get_connection(), so it serializes
+    behind any in-flight ingestion write rather than conflicting with it.
+    """
+    eligible = [t for t in (tables or list(RETENTION_TARGETS)) if t in RETENTION_TARGETS]
+    rejected = [t for t in (tables or []) if t not in RETENTION_TARGETS]
+
+    pre_backup = None
+    if apply_changes and backup_first:
+        pre_backup = run_backup_cycle(label="pre-retain")
+
+    results: Dict[str, Any] = {}
+    for table in eligible:
+        days = retention_days_for(table)
+        results[table] = prune_aged_data(table, days, apply_changes=apply_changes)
+
+    return {
+        "applied": bool(apply_changes),
+        "eligible_tables": eligible,
+        "rejected_tables": rejected,
+        "pre_retention_backup": (pre_backup.get("backup") if pre_backup else None),
+        "tables": results,
+    }
+
 
 
 

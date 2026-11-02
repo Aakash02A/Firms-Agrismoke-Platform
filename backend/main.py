@@ -46,7 +46,7 @@ import database as db
 from app_config import config
 from backend.integrations.weather import weather_service, LiveWeatherSnapshot
 from backend.integrations.air_quality import air_quality_service
-from backend.scheduler import scheduler
+from backend.scheduler import scheduler, maintenance_scheduler
 from backend.security import mask_url, redact_secrets, known_env_secrets
 from backend.policy_simulator import (
     PolicySimulationRequest,
@@ -661,6 +661,17 @@ def trigger_weather_sync_job():
     return scheduler.trigger_weather_refresh_now()
 
 
+@app.get("/api/v1/maintenance/status")
+def get_maintenance_status():
+    """Retrieve backup / retention scheduler telemetry and disk-headroom status.
+
+    Read-only by design (safe under production READ_ONLY mode). The disk and
+    off-site fields let an operator confirm the persistent volume is not filling
+    up and that off-site delivery is actually configured.
+    """
+    return maintenance_scheduler.get_status()
+
+
 # ----------------- Real-Time WebSocket Telemetry Stream -----------------
 
 class ConnectionManager:
@@ -769,13 +780,17 @@ def get_alert_channels_and_logs(limit: int = 20):
 
 @app.on_event("startup")
 def startup_event():
-    """Validate/bootstrap the SQLite database, then start the ingestion scheduler.
+    """Validate/bootstrap the SQLite database, then start background workers.
 
     ensure_ready() creates the DB parent directory (Render persistent disks start
     empty), applies schema + indexes idempotently, enables WAL, seeds a brand-new
     volume, and runs an integrity check. It raises only when the database is
     genuinely unusable, so a misconfigured deployment fails fast and loudly here
     instead of returning 500s on every request.
+
+    The ingestion scheduler and the maintenance (backup/retention) scheduler are
+    each gated by an environment flag so a deployment can run them from a single
+    instance only (see config.scheduler_enabled / maintenance_enabled).
     """
     try:
         diag = db.ensure_ready()
@@ -784,13 +799,22 @@ def startup_event():
     except Exception as exc:
         logger.error("Database bootstrap failed: %s", redact_secrets(str(exc), known_env_secrets()))
         raise
-    scheduler.start()
+    if config.scheduler_enabled:
+        scheduler.start()
+    else:
+        logger.info("Ingestion scheduler disabled via SCHEDULER_ENABLED=false.")
+    if config.maintenance_enabled:
+        maintenance_scheduler.start()
+    else:
+        logger.info("Database maintenance scheduler disabled via MAINTENANCE_ENABLED=false.")
 
 
 @app.on_event("shutdown")
 def shutdown_event():
     """Safely terminate background threads on server shutdown."""
     scheduler.stop()
+    maintenance_scheduler.stop()
+
 
 # ----------------- Serve Frontend Static Files -----------------
 

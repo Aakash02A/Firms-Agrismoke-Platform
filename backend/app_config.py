@@ -76,6 +76,14 @@ class AppConfig:
         self.proxy_headers: bool = _get_bool("PROXY_HEADERS", True)
         self.forwarded_allow_ips: str = os.getenv("FORWARDED_ALLOW_IPS", "*")
 
+        # Background jobs. Both default ON. A deployment MUST run a single app
+        # instance / worker so scheduled jobs execute exactly once; if you ever
+        # scale to more than one instance, set these to false on every instance
+        # except a designated single "worker" service (otherwise each replica
+        # would run its own ingestion + backup loop against the same disk).
+        self.scheduler_enabled: bool = _get_bool("SCHEDULER_ENABLED", True)
+        self.maintenance_enabled: bool = _get_bool("MAINTENANCE_ENABLED", True)
+
     def _resolve_cors_origins(self) -> List[str]:
         raw = os.getenv("CORS_ORIGINS", "").strip()
         if raw:

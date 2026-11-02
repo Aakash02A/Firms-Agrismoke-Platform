@@ -34,7 +34,55 @@ services:
         secret: true                    # set value in Render dashboard
       - key: CORS_ORIGINS
         value: ""                       # same-origin (frontend served by this app)
+
+      # ---- Background jobs (single instance runs them exactly once) ----
+      - key: SCHEDULER_ENABLED
+        value: "true"
+      - key: MAINTENANCE_ENABLED
+        value: "true"
+      - key: FIRMS_INTERVAL_SECONDS
+        value: "10800"                  # NASA FIRMS sync every 3h
+      - key: WEATHER_INTERVAL_SECONDS
+        value: "900"                    # weather cache refresh every 15m
+
+      # ---- SQLite backup automation ----
+      - key: BACKUP_INTERVAL_SECONDS
+        value: "21600"                  # snapshot every 6h (plus once at boot)
+      - key: BACKUP_RETENTION_KEEP
+        value: "10"                     # keep newest 10 local snapshots
+      - key: RETENTION_INTERVAL_SECONDS
+        value: "86400"                  # prune aged rows daily
+      - key: RETENTION_APPLY
+        value: "true"                   # false = dry-run (counts only)
+      - key: BACKUP_BEFORE_RETAIN
+        value: "true"                   # always snapshot before a destructive prune
+      - key: SQLITE_MIN_FREE_MB
+        value: "512"                    # warn when the volume drops below this
+
+      # ---- Off-site backup / DISASTER RECOVERY ----
+      # Snapshots on /var/data are NOT off-site. Recommended: an S3-compatible
+      # bucket (Cloudflare R2 / Backblaze B2 / AWS S3 / MinIO) - set
+      # OFFSITE_BACKEND=s3 and fill the secret keys in the dashboard (requires
+      # boto3 in the image). The "directory" option copies to a SEPARATE mount,
+      # e.g. a second Render disk at /var/offsite (adds diskMounts entry below).
+      - key: OFFSITE_BACKEND
+        value: "none"                   # none | directory | s3
+      - key: OFFSITE_S3_BUCKET
+        value: ""
+      - key: OFFSITE_S3_ENDPOINT
+        value: ""
+      - key: OFFSITE_S3_REGION
+        value: ""
+      - key: OFFSITE_S3_ACCESS_KEY
+        secret: true                    # optional; falls back to env if unset
+      - key: OFFSITE_S3_SECRET_KEY
+        secret: true                    # SECRET - redacted from all logs
     diskMounts:
       - name: agrismoke-data
         mountPath: /var/data
         sizeGB: 1
+        # For OFFSITE_BACKEND=directory, add a SECOND independent disk and point
+        # OFFSITE_BACKUP_DIR at it, e.g.:
+        #   - name: agrismoke-offsite
+        #     mountPath: /var/offsite
+        #     sizeGB: 1
