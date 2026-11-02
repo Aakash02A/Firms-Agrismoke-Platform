@@ -115,7 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // If map tab is selected, trigger resize, re-init particles, and load the 3-day outlook
         if (tabId === 'map') {
-            loadMultidayOutlook();
+            refreshOutlook();
             if (map) setTimeout(() => {
                 map.resize();
                 map.reinitParticles();
@@ -814,6 +814,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const chartEl = document.getElementById('chart-outlook-hourly');
         const badgeEl = document.getElementById('outlook-met-badge');
         const noteEl = document.getElementById('outlook-note');
+        const titleEl = document.getElementById('outlook-title');
+        if (titleEl) titleEl.textContent = '3-Day Airshed Outlook \u2014 Delhi-NCR';
         if (!daysEl || !chartEl) return;
         if (!isBackendConnected) {
             daysEl.innerHTML = '<span style="color:#64748b;font-size:12px;">Connect the backend to view the 72-hour airshed outlook.</span>';
@@ -847,7 +849,90 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    document.getElementById('btn-refresh-outlook')?.addEventListener('click', loadMultidayOutlook);
+    // Populate the outlook city filter from the same stations shown in the
+    // sidebar LIVE TELEMETRY STREAM (plus the Delhi-NCR airshed-model default).
+    function populateOutlookCityFilter() {
+        const sel = document.getElementById('outlook-city-select');
+        if (!sel) return;
+        const prev = sel.value;
+        const opts = ['<option value="__airshed__">Delhi-NCR (airshed model)</option>'];
+        (DEMO_DATA.monitoringStations || []).forEach(st => {
+            opts.push(`<option value="${st.id}">${shortStationName(st.name)}</option>`);
+        });
+        sel.innerHTML = opts.join('');
+        if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+    }
+
+    function categoryForAqi(aqi) {
+        const cats = DEMO_DATA.aqiCategories || [];
+        const found = cats.find(c => aqi >= c.min && aqi <= c.max);
+        return found ? found.label : '';
+    }
+
+    // Render a single city's own 72h AQI outlook (real Open-Meteo Air Quality
+    // hourly forecast for that station's lat/lng) into the outlook card.
+    async function renderCityOutlook(st) {
+        const daysEl = document.getElementById('outlook-day-cards');
+        const chartEl = document.getElementById('chart-outlook-hourly');
+        const badgeEl = document.getElementById('outlook-met-badge');
+        const noteEl = document.getElementById('outlook-note');
+        const titleEl = document.getElementById('outlook-title');
+        if (!daysEl || !chartEl) return;
+        if (titleEl) titleEl.textContent = `3-Day Airshed Outlook \u2014 ${st.name}`;
+        if (!isBackendConnected) {
+            daysEl.innerHTML = '<span style="color:#64748b;font-size:12px;">Connect the backend to view this city\u2019s forecast.</span>';
+            chartEl.innerHTML = '';
+            return;
+        }
+        daysEl.innerHTML = `<span style="color:#64748b;font-size:12px;">Loading ${shortStationName(st.name)} forecast\u2026</span>`;
+        try {
+            const res = await fetch(`${API_BASE}/api/air-quality/forecast?lat=${st.lat}&lng=${st.lng}&hours=72`);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            if (!data.isLive || !Array.isArray(data.hourly) || !data.hourly.length) {
+                daysEl.innerHTML = '<span style="color:#64748b;font-size:12px;">No forecast available for this city right now.</span>';
+                chartEl.innerHTML = '';
+                return;
+            }
+            if (badgeEl) { badgeEl.textContent = `Live per-city AQI \u00b7 ${shortStationName(st.name)}`; badgeEl.style.color = 'var(--accent-primary)'; }
+            if (noteEl) noteEl.textContent = "This city\u2019s own Open-Meteo Air Quality hourly forecast (CAMS model), independent of the Delhi dispersion model.";
+
+            const hourly = data.hourly;
+            const colorFor = (aqi) => (map && map.getAqiColor) ? map.getAqiColor(aqi) : '#64748b';
+            const byDay = {};
+            hourly.forEach(h => { (byDay[h.dayLabel] = byDay[h.dayLabel] || []).push(h); });
+            const dayNames = ['Today', 'Tomorrow', 'Day 3'];
+            daysEl.innerHTML = Object.keys(byDay).slice(0, 3).map((d, idx) => {
+                const arr = byDay[d];
+                const aqis = arr.map(x => x.aqi);
+                const mean = Math.round(aqis.reduce((a, b) => a + b, 0) / aqis.length);
+                const peak = Math.max(...aqis);
+                const peakH = arr.find(x => x.aqi === peak);
+                return `<div style="flex:1;min-width:150px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:11px;color:var(--text-muted);">${dayNames[idx] || d}</div>
+                    <div style="font-size:24px;font-weight:700;color:${colorFor(mean)};line-height:1.1;">${mean}</div>
+                    <div style="font-size:11px;color:var(--text-secondary);">${categoryForAqi(mean)}</div>
+                    <div style="font-size:10.5px;color:var(--text-muted);margin-top:4px;">peak ${peak} @ ${peakH ? peakH.hourLabel : ''}</div>
+                </div>`;
+            }).join('');
+            charts.renderHourlyForecastChart('chart-outlook-hourly', hourly);
+        } catch (e) {
+            daysEl.innerHTML = '<span style="color:#dc2626;font-size:12px;">Could not load city forecast: ' + e.message + '</span>';
+        }
+    }
+
+    // Route the outlook render to the airshed model or the selected city.
+    function refreshOutlook() {
+        const sel = document.getElementById('outlook-city-select');
+        const val = sel ? sel.value : '__airshed__';
+        if (val === '__airshed__') { loadMultidayOutlook(); return; }
+        const st = (DEMO_DATA.monitoringStations || []).find(s => String(s.id) === val);
+        if (st) renderCityOutlook(st); else loadMultidayOutlook();
+    }
+
+    populateOutlookCityFilter();
+    document.getElementById('btn-refresh-outlook')?.addEventListener('click', refreshOutlook);
+    document.getElementById('outlook-city-select')?.addEventListener('change', refreshOutlook);
 
     modalClose?.addEventListener('click', () => {
         modal.classList.remove('visible');
@@ -1548,8 +1633,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // Hydrate live NASA FIRMS observations
             await loadFirmsData();
 
-            // Refresh the 3-day airshed outlook panel (map tab) with current data
-            loadMultidayOutlook();
+            // Refresh city filter + 3-day outlook panel (map tab) with current data
+            populateOutlookCityFilter();
+            refreshOutlook();
         } catch (err) {
             console.error("Error hydrating data from SQLite:", err);
         }

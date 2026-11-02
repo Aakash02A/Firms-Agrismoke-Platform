@@ -772,7 +772,9 @@ if FRONTEND_DIR.exists():
 
     @app.get("/")
     def serve_frontend():
-        return FileResponse(FRONTEND_DIR / "index.html")
+        # no-cache so HTML edits (and the SW cache-version bump) take effect on the
+        # next reload instead of being served from a stale browser/service-worker cache.
+        return FileResponse(FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 # ----------------- Run Standalone -----------------
 if __name__ == "__main__":

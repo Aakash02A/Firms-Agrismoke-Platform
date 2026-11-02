@@ -208,6 +208,16 @@ class AgriSmokeChartsEngine {
 
         const gridVals = [0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
 
+        // Build a tooltip that adapts to airshed (has band/wind/pbl) vs per-city (pm2.5 only) data
+        const tooltipFor = (h) => {
+            let t = `<strong>${h.time || ''}</strong><br>AQI: <strong style='color:#0284c7'>${h.aqi}</strong>`;
+            if (h.category) t += ` (${h.category})`;
+            if (h.aqiLower != null && h.aqiUpper != null) t += `<br>Range: ${h.aqiLower}&ndash;${h.aqiUpper}`;
+            if (h.windSpeed != null && h.pbl != null) t += `<br>Wind: ${h.windSpeed} km/h &bull; PBL: ${h.pbl} m`;
+            else if (h.pm25 != null) t += `<br>PM2.5: ${h.pm25} \u00b5g/m\u00b3`;
+            return t;
+        };
+
         let svg = `
         <svg viewBox="0 0 ${width} ${height}" class="chart-svg" style="width:100%;height:100%;">
             ${gridVals.map(val => {
@@ -223,7 +233,7 @@ class AgriSmokeChartsEngine {
             <path d="${linePath}" fill="none" stroke="#0284c7" stroke-width="2.2"/>
 
             ${hourly.map((h, i) => i % 3 === 0 ? `<circle cx="${xAt(i)}" cy="${yAt(h.aqi)}" r="2.6" fill="#ffffff" stroke="#0284c7" stroke-width="1.6"
-                data-chart-tooltip="<strong>${h.time}</strong><br>AQI: <strong style='color:#0284c7'>${h.aqi}</strong> (${h.category})<br>Range: ${h.aqiLower}&ndash;${h.aqiUpper}<br>Wind: ${h.windSpeed} km/h &bull; PBL: ${h.pbl} m"
+                data-chart-tooltip="${tooltipFor(h)}"
             />` : '').join('')}
 
             <!-- X axis labels -->
