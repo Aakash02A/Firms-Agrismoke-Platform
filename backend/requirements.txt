@@ -11,3 +11,8 @@ joblib>=1.4,<2.0
 xgboost>=2.1,<3.0
 requests>=2.31,<3.0
 python-dotenv>=1.0,<2.0
+# httpx is required by Starlette/FastAPI's TestClient (used by the PWA and
+# scheduler suites). It is an OPTIONAL dep of fastapi, so it is NOT pulled in
+# automatically; without it those suites crash with
+# "ModuleNotFoundError: No module named 'httpx'" on a clean CI install.
+httpx>=0.27,<1.0

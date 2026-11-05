@@ -11,7 +11,7 @@ Powered by live **NASA FIRMS** satellite detections, **Open-Meteo** meteorology,
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.13-3776ab?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-5%2F5%20suites-brightgreen)
+![Tests](https://img.shields.io/badge/tests-10%2F10%20suites-brightgreen)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-informational?logo=githubactions&logoColor=white)
 ![Data](https://img.shields.io/badge/data-NASA__FIRMS%20%C2%B7%20Open--Meteo-orange)
 ![PWA](https://img.shields.io/badge/PWA-offline-blueviolet)
@@ -40,7 +40,7 @@ Every headline number is derived from **real satellite and weather data** — th
 - ⚖️ **Policy Simulator** — what-if table computed live from bio-decomposer / Happy-Seeder adoption rates.
 - 📥 **Export & Print** — CSV diagnostic report and a structured printable briefing.
 - 🌐 **i18n** — English / हिन्दी toggle with persisted preference.
-- 📱 **PWA & offline** — installable, network-first service worker.
+- 📱 **Responsive & offline** — installable PWA with a network-first service worker; the sidebar collapses to an icon rail on tablets and opens as an off-canvas drawer on phones.
 - 🔒 **Production-hardened** — CSP, locked CORS, HSTS, read-only mode, gated API docs, rate limiting, non-root container, `/api/health`.
 
 ---
@@ -230,7 +230,7 @@ Guidance: [`doc/SETUP_GUIDE.md`](doc/SETUP_GUIDE.md) and [`doc/ARCHITECTURE.md`]
 ```bash
 python tests/run_all_tests.py
 ```
-Runs 5 end-to-end suites — frontend DOM references, SQLite schema/CRUD, NASA FIRMS ingestion, ML & dispersion physics, and the FastAPI endpoint layer (**26 endpoints**). Currently **5/5 passing**.
+Runs **10** end-to-end suites — frontend DOM references, PWA & static-asset serving, SQLite schema/CRUD, SQLite production readiness (WAL/backup/retention), scheduler ingestion & backup automation, NASA FIRMS ingestion, on-demand FIRMS (stateless deployment), ML & dispersion physics, the FastAPI endpoint layer (**26 endpoints**), and secret-leakage/redaction hardening. Currently **10/10 passing**.
 
 ---
 
