@@ -1771,6 +1771,10 @@ input[type="range"]::-moz-range-thumb {
 .avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--accent-primary); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex: 0 0 34px; }
 .main-scroll { flex: 1; overflow-y: auto; padding: 22px 26px 60px; }
 
+/* Drawer backdrop is inert (and not a flex item) until the mobile breakpoint
+   activates it, so it never disturbs the desktop sidebar layout. */
+.nav-overlay { display: none; }
+
 /* Keep the notice/alert strips tidy inside the scroll region */
 .main-scroll .demo-banner { margin-bottom: 14px; }
 
@@ -1787,6 +1791,68 @@ input[type="range"]::-moz-range-thumb {
     .main-scroll { padding: 16px; }
     .topbar { padding: 12px 16px; }
     .page-title { font-size: 17px; }
+}
+
+/* ---- Off-canvas mobile drawer (<=640px) ----
+   The icon-rail collapse is a desktop affordance. On a phone even the 78px
+   rail steals width the map/dashboard needs, so below 640px the sidebar
+   leaves the flex flow (position: fixed), hides itself off-screen to the left,
+   and slides in OVER the content as a drawer. ui-chrome.js toggles the
+   .nav-open class on #app-shell from the same hamburger button and dims the
+   page with the .nav-overlay backdrop (tap it, a nav item, or the button to
+   close). Full labels are restored here because the <=960px icon-rail rules
+   still match; this later block wins on conflicting properties. */
+@media (max-width: 640px) {
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        height: 100dvh;
+        width: 264px;
+        flex-basis: 264px;
+        transform: translateX(-100%);
+        transition: transform .24s ease;
+        z-index: 1000;
+        box-shadow: 0 0 40px rgba(0, 0, 0, .28);
+        padding: 16px 14px;
+    }
+    /* Undo the <=960px icon-rail so the drawer reads as a full sidebar. */
+    .sidebar .brand-txt,
+    .sidebar .nav-txt,
+    .sidebar .side-label,
+    .sidebar .side-search input,
+    .sidebar .foot-txt,
+    .sidebar .live-station-pills,
+    .sidebar .live-status-text,
+    .sidebar .live-sync-time,
+    .sidebar .live-weather-badge,
+    .sidebar .side-status { display: revert; }
+    .sidebar .brand,
+    .sidebar .nav-tab-btn,
+    .sidebar .foot-btn { justify-content: flex-start; }
+    .sidebar .nav-tab-btn { border-left-width: 3px; }
+    .sidebar .live-telemetry-bar { align-items: stretch; padding: 10px; border: 1px solid var(--border-color); background: var(--bg-secondary); box-shadow: none; }
+    .sidebar .live-telemetry-indicator { justify-content: flex-start; }
+    .sidebar .sidebar-foot { border-top: 1px solid var(--border-color); padding-top: 12px; }
+
+    .app-shell.nav-open .sidebar { transform: translateX(0); }
+
+    .nav-overlay {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, .48);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity .24s ease, visibility .24s ease;
+        z-index: 999;
+    }
+    .app-shell.nav-open .nav-overlay { opacity: 1; visibility: visible; }
+
+    /* The drawer overlays content, so the main area keeps full width. */
+    .main-scroll { padding: 14px 12px 60px; }
+    .topbar { padding: 10px 12px; }
 }
 
 /* ==========================================================================

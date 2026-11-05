@@ -13,16 +13,41 @@
     'use strict';
 
     function init() {
-        // ---- Sidebar collapse toggle + breadcrumb label sync ----
+        // ---- Sidebar toggle: desktop icon-rail collapse vs mobile drawer ----
+        // Below 640px the sidebar is an off-canvas overlay (see styles.css
+        // @media 640px) driven by the .nav-open class; on wider screens the
+        // same button collapses it to the 78px icon rail via .collapsed.
         var shell = document.getElementById('app-shell');
         var toggleBtn = document.getElementById('sidebar-toggle');
+        var overlay = document.getElementById('nav-overlay');
+        var mobileQuery = window.matchMedia('(max-width: 640px)');
+
+        function isMobile() { return mobileQuery.matches; }
+
+        function closeDrawer() {
+            if (shell) shell.classList.remove('nav-open');
+            if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+
+        // Leaving the mobile range must drop drawer state so a stale .nav-open
+        // never interferes with the desktop layout.
+        function syncMode() { if (!isMobile()) closeDrawer(); }
+
         if (shell && toggleBtn) {
+            toggleBtn.setAttribute('aria-expanded', 'false');
             toggleBtn.addEventListener('click', function () {
-                shell.classList.toggle('collapsed');
+                if (isMobile()) {
+                    var open = shell.classList.toggle('nav-open');
+                    toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                } else {
+                    shell.classList.toggle('collapsed');
+                }
                 // Let the map recompute its canvas size after the width transition
                 setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 240);
             });
         }
+
+        if (overlay) overlay.addEventListener('click', closeDrawer);
 
         var crumb = document.getElementById('crumb-section');
         document.querySelectorAll('.nav-tab-btn').forEach(function (btn) {
@@ -31,8 +56,16 @@
                     var t = btn.querySelector('.nav-txt');
                     crumb.textContent = t ? t.textContent : btn.textContent;
                 }
+                // On mobile, dismiss the drawer so the chosen panel is visible.
+                if (isMobile()) closeDrawer();
             });
         });
+
+        if (mobileQuery.addEventListener) {
+            mobileQuery.addEventListener('change', syncMode);
+        } else if (mobileQuery.addListener) {
+            mobileQuery.addListener(syncMode);  // older Safari
+        }
 
         // ---- Service Worker registration (PWA / offline) ----
         if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
