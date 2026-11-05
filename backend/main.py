@@ -517,9 +517,15 @@ def get_firms_observations(
     """
     Query real satellite thermal anomaly observations from SQLite.
     Supports filtering by acquisition date, satellite, confidence score, FRP, state, and classification.
+
+    On a stateless deployment with no ingestion scheduler the ``fire_observations``
+    table is empty, so the map would silently fall back to seeded demo points. When
+    FIRMS_ON_DEMAND is enabled and no stored rows match, a LIVE point-level FIRMS
+    snapshot is fetched on the read path (no DB writes) so the map shows current
+    satellite detections, consistent with /api/hotspots and /api/districts.
     """
     clamped_limit = max(1, min(2000, limit))
-    return db.get_fire_observations(
+    rows = db.get_fire_observations(
         start_date=start_date,
         end_date=end_date,
         satellite=satellite,
@@ -531,6 +537,10 @@ def get_firms_observations(
         limit=clamped_limit,
         offset=offset
     )
+    if not rows and config.firms_on_demand:
+        from backend.integrations.nasa_firms import on_demand
+        rows = on_demand.get_live_observations(clamped_limit)
+    return rows
 
 
 @app.get("/api/v1/firms/summary")

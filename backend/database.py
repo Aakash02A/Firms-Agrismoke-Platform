@@ -259,13 +259,19 @@ def get_early_warning_alerts() -> List[Dict[str, Any]]:
         ]
 
 def get_custom_thresholds() -> Dict[str, int]:
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT aqi_threshold, fires_threshold FROM custom_thresholds WHERE id = 1")
-        row = cursor.fetchone()
-        if row:
-            return {"aqi": row["aqi_threshold"], "fires": row["fires_threshold"]}
-        return {"aqi": 400, "fires": 2000}
+    # Read-only lookup with safe defaults: a missing table or DB error must not
+    # crash /api/status (previously raised "no such table: custom_thresholds"
+    # when the DB file existed but was never initialized).
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT aqi_threshold, fires_threshold FROM custom_thresholds WHERE id = 1")
+            row = cursor.fetchone()
+            if row:
+                return {"aqi": row["aqi_threshold"], "fires": row["fires_threshold"]}
+    except sqlite3.Error as exc:
+        logger.warning("Custom thresholds lookup failed (%s); using defaults", exc)
+    return {"aqi": 400, "fires": 2000}
 
 def update_custom_thresholds(aqi: int, fires: int) -> Dict[str, int]:
     with get_connection() as conn:

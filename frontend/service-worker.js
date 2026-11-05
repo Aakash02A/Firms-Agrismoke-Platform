@@ -4,11 +4,12 @@
  * Employs a Network-First strategy for static assets (always fresh when online) and Network-First for API calls, both with cache fallback for offline field use.
  */
 
-const CACHE_NAME = 'agrismoke-v3.4';
+const CACHE_NAME = 'agrismoke-v3.5';
 const STATIC_ASSETS = [
     'index.html',
     'css/styles.css',
     'js/app.js',
+    'js/ui-chrome.js',
     'js/i18n.js',
     'js/map-engine.js',
     'js/charts-engine.js',

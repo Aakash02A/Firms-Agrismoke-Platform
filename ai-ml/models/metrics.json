@@ -1,6 +1,6 @@
 {
   "model_name": "GradientBoostingRegressor",
-  "selected_at": "2026-10-29 08:50:26 UTC",
+  "selected_at": "2026-11-05 07:55:59 UTC",
   "target_variable": "total_pm25",
   "features": [
     "fire_count",
@@ -22,32 +22,32 @@
     "r2_score": 0.9886,
     "rmse": 17.672,
     "mae": 9.509,
-    "training_time_sec": 9.86
+    "training_time_sec": 4.06
   },
   "all_candidate_metrics": {
     "GradientBoostingRegressor": {
       "r2_score": 0.9886,
       "rmse": 17.672,
       "mae": 9.509,
-      "training_time_sec": 9.86
+      "training_time_sec": 4.06
     },
     "RandomForestRegressor": {
       "r2_score": 0.9834,
       "rmse": 21.381,
       "mae": 11.037,
-      "training_time_sec": 2.68
+      "training_time_sec": 0.71
     },
     "RidgeRegression": {
       "r2_score": 0.6586,
       "rmse": 96.896,
       "mae": 60.172,
-      "training_time_sec": 0.01
+      "training_time_sec": 0.0
     },
     "XGBoostRegressor": {
-      "r2_score": 0.9878,
-      "rmse": 18.31,
-      "mae": 9.551,
-      "training_time_sec": 2.74
+      "r2_score": 0.9876,
+      "rmse": 18.468,
+      "mae": 9.641,
+      "training_time_sec": 2.0
     }
   },
   "feature_importances": {

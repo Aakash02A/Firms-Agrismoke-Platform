@@ -139,6 +139,32 @@ class TestAggregation(OnDemandTestCase):
         # The statelessness guarantee: the live read path wrote NOTHING to the DB.
         self.assertEqual(self.obs_count(), 0)
 
+    def test_point_level_observations_for_the_map(self):
+        # The map reads /api/v1/firms/observations; on a stateless deploy the DB is
+        # empty, so on_demand must supply point-level, DB-shaped LIVE rows.
+        os.environ["NASA_FIRMS_MAP_KEY"] = FAKE_KEY
+        self.boot_db()
+        self.assertEqual(self.obs_count(), 0)
+
+        with mock.patch.object(NasaFirmsClient, "get_area_observations_csv",
+                               return_value=SAMPLE_CSV):
+            obs = on_demand.get_live_observations(limit=1000)
+
+        self.assertEqual(len(obs), 3, "one row per CSV detection")
+        for field in ("id", "latitude", "longitude", "frp", "classification",
+                      "confidence_normalized", "acquisition_timestamp"):
+            self.assertIn(field, obs[0])
+        self.assertTrue(obs[0]["live"])
+        self.assertEqual(obs[0]["source"], "NASA_FIRMS_ON_DEMAND")
+        # Still stateless: point-level path wrote nothing to fire_observations.
+        self.assertEqual(self.obs_count(), 0)
+
+    def test_unconfigured_observations_empty(self):
+        self.boot_db()
+        with mock.patch.object(NasaFirmsClient, "get_area_observations_csv",
+                               side_effect=AssertionError("network must not be used")):
+            self.assertEqual(on_demand.get_live_observations(), [])
+
 
 class TestTTLCacheIsTrafficIndependent(OnDemandTestCase):
     def test_many_requests_trigger_at_most_one_fetch_per_ttl(self):

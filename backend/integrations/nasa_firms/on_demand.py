@@ -3,10 +3,10 @@ AgriSmoke AI - On-Demand NASA FIRMS Live Snapshot (stateless read path)
 
 Public/stateless deployments run NO background scheduler, so the ingestion
 that normally keeps ``fire_observations`` fresh does not happen. This module
-lets the read-only dashboard endpoints (fire hotspots & district counts) fetch
-a LIVE NASA FIRMS snapshot on demand WITHOUT writing anything to the database,
-so the deployment stays stateless and no unauthenticated request can mutate the
-public database.
+lets the read-only dashboard endpoints (fire hotspots, district counts, and the
+map's point-level observations) fetch a LIVE NASA FIRMS snapshot on demand
+WITHOUT writing anything to the database, so the deployment stays stateless and
+no unauthenticated request can mutate the public database.
 
 Safety within free-tier outbound limits:
   * short-lived in-memory TTL cache (default 15m) - the number of NASA calls is
@@ -35,7 +35,7 @@ from .config import FirmsConfig
 from .client import NasaFirmsClient
 from .parser import parse_firms_csv
 from .normalizer import normalize_observation
-from .classifier import haversine_km
+from .classifier import classify_fire_observation, haversine_km
 
 try:
     from backend import database
@@ -48,8 +48,9 @@ logger = logging.getLogger("agri_smoke.firms.on_demand")
 # mirroring the scheduled ingestion service so live and stored data agree.
 _DISTRICT_MATCH_KM = 35.0
 
-# In-memory snapshot cache. ``_data`` is (hotspots, district_counts) or None.
-_data: Optional[Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = None
+# In-memory snapshot cache. ``_data`` is (hotspots, district_counts, observations)
+# or None.
+_data: Optional[Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]] = None
 _expires_at: float = 0.0
 _read_lock = threading.Lock()        # guards _data / _expires_at
 _fetch_lock = threading.Lock()       # single-flight: one refresh at a time
@@ -89,29 +90,42 @@ def _match_district(lat: float, lon: float, districts: List[Dict[str, Any]]) -> 
     return best
 
 
-def _build_snapshot() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _build_snapshot() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Fetch + aggregate a fresh FIRMS snapshot. Raises on provider failure;
-    callers must not let that reach the request handler."""
+    callers must not let that reach the request handler.
+
+    Returns (hotspots, district_counts, observations). The first two back the
+    /api/hotspots and /api/districts endpoints; the third is a point-level,
+    DB-shaped list (mirroring database.get_fire_observations output) so the
+    map can render LIVE detections on a stateless deploy with an empty DB
+    instead of silently falling back to the seeded demo hotspots."""
     config = FirmsConfig()
     if not config.is_configured:
         # MAP_KEY absent: signal "no live data" so the caller uses fallback.
-        return [], []
+        return [], [], []
 
     client = NasaFirmsClient(config)
     csv_data = client.get_area_observations_csv()   # defaults: region + sensor + range from config
     raw_rows, _rejected = parse_firms_csv(csv_data)
     if not raw_rows:
-        return [], []
+        return [], [], []
 
     districts = database.get_districts()
 
     # Aggregate by matched district: count, mean FRP, centroid, mean confidence.
+    # Also emit a point-level, DB-compatible observation list for the map.
     grouped: Dict[str, Dict[str, Any]] = {}
+    observations: List[Dict[str, Any]] = []
     for row in raw_rows:
         obs = normalize_observation(row, source_dataset=config.default_sensor)
         match = _match_district(obs["latitude"], obs["longitude"], districts)
         name = match["name"] if match else "Regional Airshed"
         state = match["state"] if match else "North India"
+
+        # Apply the same agricultural/industrial/forest classification the
+        # scheduled ingestion uses, so live and stored map points agree.
+        clf = classify_fire_observation(obs, match)
+        conf_norm = float(obs.get("confidence_normalized") or 0.6)
 
         g = grouped.get(name)
         if g is None:
@@ -121,7 +135,30 @@ def _build_snapshot() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         g["frp"] += float(obs.get("frp") or 0.0)
         g["lat"] += float(obs["latitude"])
         g["lng"] += float(obs["longitude"])
-        g["conf"] += float(obs.get("confidence_normalized") or 0.6)
+        g["conf"] += conf_norm
+
+        observations.append({
+            "id": obs["id"],
+            "latitude": obs["latitude"],
+            "longitude": obs["longitude"],
+            "frp": obs.get("frp", 0.0),
+            "satellite": obs.get("satellite"),
+            "instrument": obs.get("instrument"),
+            "acq_date": obs.get("acq_date"),
+            "acq_time": obs.get("acq_time"),
+            "acquisition_timestamp": obs.get("acquisition_timestamp"),
+            "confidence": obs.get("confidence_raw") or "nominal",
+            "confidence_score": conf_norm,
+            "confidence_normalized": conf_norm,
+            "state": state,
+            "district": name,
+            "district_id": name,
+            "classification": clf["classification"],
+            "classification_confidence": clf["classification_confidence"],
+            "daynight": obs.get("day_night", "D"),
+            "live": True,
+            "source": "NASA_FIRMS_ON_DEMAND",
+        })
 
     hotspots: List[Dict[str, Any]] = []
     counts: List[Dict[str, Any]] = []
@@ -154,10 +191,11 @@ def _build_snapshot() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 
     hotspots.sort(key=lambda h: h["fire_count"], reverse=True)
     counts.sort(key=lambda d: d["fires"], reverse=True)
-    return hotspots, counts
+    observations.sort(key=lambda o: o.get("acquisition_timestamp") or "", reverse=True)
+    return hotspots, counts, observations
 
 
-def _snapshot() -> Optional[Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
+def _snapshot() -> Optional[Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]]:
     """Return the cached snapshot, refreshing it at most once per TTL via a
     single-flight guard. Never raises; returns the last known (possibly stale)
     snapshot on any failure so the caller can fall through to seed data."""
@@ -205,3 +243,16 @@ def get_live_district_counts() -> List[Dict[str, Any]]:
     """On-demand live district fire counts, or [] when unavailable."""
     snap = _snapshot()
     return snap[1] if snap else []
+
+
+def get_live_observations(limit: int = 1000) -> List[Dict[str, Any]]:
+    """On-demand live point-level fire detections, or [] when unavailable.
+
+    Backs the map's /api/v1/firms/observations read path on a stateless deploy
+    where the ``fire_observations`` table is empty (no ingestion scheduler). The
+    rows mirror database.get_fire_observations output so the frontend map needs
+    no changes; when this returns [] the caller falls back to seeded data."""
+    snap = _snapshot()
+    if not snap or len(snap) < 3:
+        return []
+    return snap[2][:max(1, limit)]

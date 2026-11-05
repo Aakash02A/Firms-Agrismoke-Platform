@@ -41,6 +41,7 @@ def run_all():
 
     total = len(TEST_SCRIPTS)
     passed = 0
+    failed_suites = []
 
     for name, script in TEST_SCRIPTS:
         script_path = TESTS_DIR / script
@@ -57,6 +58,7 @@ def run_all():
             print(f"[FAILED] {name} FAILED with return code {res.returncode}")
             print("STDOUT:\n" + res.stdout)
             print("STDERR:\n" + res.stderr)
+            failed_suites.append(f"{name} ({script})")
 
     print("\n" + "=" * 70)
     print(f"Test Suite Summary: {passed}/{total} Test Suites Passed ({round((passed/total)*100)}%)")
@@ -66,7 +68,12 @@ def run_all():
         print(">> ALL SYSTEMS OPERATIONAL AND VALIDATED!")
         return 0
     else:
-        print(">> SOME TESTS FAILED. Please review the errors above.")
+        # Print failing suite names last so they are visible at the tail of
+        # truncated CI logs (GitHub Actions collapses long output).
+        print(">> SOME TESTS FAILED. Failing suites:")
+        for suite in failed_suites:
+            print(f"   - {suite}")
+        print(">> Please review the errors above.")
         return 1
 
 if __name__ == "__main__":
